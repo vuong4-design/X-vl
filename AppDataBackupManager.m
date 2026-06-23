@@ -475,30 +475,42 @@ static NSString *PXCleanSubdirName(NSString *s) {
     return path;
 }
 
-- (void)_wipeDirectoryContents:(NSString *)dirPath {
+- (NSArray<NSString *> *)_wipeDirectoryContents:(NSString *)dirPath {
     if (!dirPath.length) {
-        return;
+        return @[];
     }
     // Wipe everything inside the directory, but preserve container metadata files.
     // Deleting these can break MCM/LaunchServices container mapping (especially for App Groups).
+    // A1: returns the list of paths that failed to delete so callers can react
+    // (data container restore treats a non-empty result as a hard failure to
+    // avoid mixing stale and restored data).
     NSFileManager *fm = [NSFileManager defaultManager];
     NSError *listErr = nil;
     NSArray<NSString *> *items = [fm contentsOfDirectoryAtPath:dirPath error:&listErr];
     if (!items.count) {
-        return;
+        return @[];
     }
     NSSet<NSString *> *preserve = [NSSet setWithArray:@[
         @".com.apple.mobile_container_manager.metadata.plist",
         @".com.apple.containermanagerd.metadata.plist"
     ]];
+    NSMutableArray<NSString *> *failed = [NSMutableArray array];
     for (NSString *name in items) {
         if (![name isKindOfClass:[NSString class]] || !name.length) continue;
         if ([preserve containsObject:name]) {
             continue;
         }
         NSString *p = [dirPath stringByAppendingPathComponent:name];
-        [fm removeItemAtPath:p error:nil];
+        NSError *rmErr = nil;
+        if (![fm removeItemAtPath:p error:&rmErr]) {
+            // Re-check existence: removeItemAtPath can report failure even when
+            // the entry is already gone in some edge cases.
+            if ([fm fileExistsAtPath:p]) {
+                [failed addObject:p];
+            }
+        }
     }
+    return failed;
 }
 
 - (NSString *)_preferencesPlistPathForBundleID:(NSString *)bundleID {
@@ -1431,12 +1443,21 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
                     NSString *dst = [backupDir stringByAppendingPathComponent:dstRel];
 
                     // Best-effort stop associated daemons first.
+                    // A3: poll for actual exit instead of a fixed sleep so the
+                    // copy does not race a daemon that still holds the DB open.
                     [self _killRelatedProcessesForBundleID:bundleID];
-                    PXKillallByName(@"accountsd", SIGTERM);
-                    PXKillallByName(@"calaccessd", SIGTERM);
-                    PXKillallByName(@"imagent", SIGTERM);
-                    PXKillallByName(@"MobileSMS", SIGTERM);
-                    [NSThread sleepForTimeInterval:0.15];
+                    NSArray<NSString *> *dbDaemonsBackup = @[@"accountsd", @"calaccessd", @"imagent", @"MobileSMS"];
+                    for (NSString *d in dbDaemonsBackup) {
+                        PXKillallByName(d, SIGTERM);
+                    }
+                    if (!PXWaitForProcessesToExit(dbDaemonsBackup, 2.0)) {
+                        for (NSString *d in dbDaemonsBackup) {
+                            if (PXProcessIsRunning(d)) {
+                                PXKillallByName(d, SIGKILL);
+                            }
+                        }
+                        PXWaitForProcessesToExit(dbDaemonsBackup, 0.5);
+                    }
 
                     PXDebugAppendLine(debugBefore, [NSString stringWithFormat:@"copy %@ -> %@", src, dstRel]);
                     [runner run:[NSString stringWithFormat:@"cp -a %@ %@ 2>/dev/null || true", PXShellQuote(src), PXShellQuote(dst)]];
@@ -1585,6 +1606,46 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
     });
 }
 
+// A4 helper: remove stale quarantine trash entries ("*.WeaponXTrash.<epoch>")
+// in the given directories that are older than the supplied age. The epoch
+// suffix must be pure digits; entries without a valid numeric epoch are skipped.
+// Scope is deliberately narrow: only the named directories are scanned (no
+// recursion), and only files matching the WeaponXTrash naming pattern are
+// considered. A quarantine created during the current restore run will have a
+// recent epoch and therefore will not be eligible for removal.
+- (void)_cleanStaleQuarantineTrashInDirectories:(NSArray<NSString *> *)dirs
+                                      olderThan:(NSTimeInterval)maxAge {
+    if (dirs.count == 0) return;
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSTimeInterval nowEpoch = [[NSDate date] timeIntervalSince1970];
+    NSSet<NSString *> *seen = [NSSet setWithArray:dirs];
+    for (NSString *dir in seen) {
+        if (![dir isKindOfClass:[NSString class]] || !dir.length) continue;
+        BOOL isDir = NO;
+        if (![fm fileExistsAtPath:dir isDirectory:&isDir] || !isDir) continue;
+        NSError *listErr = nil;
+        NSArray<NSString *> *entries = [fm contentsOfDirectoryAtPath:dir error:&listErr];
+        if (!entries) continue;
+        for (NSString *name in entries) {
+            NSRange marker = [name rangeOfString:@".WeaponXTrash." options:NSBackwardsSearch];
+            if (marker.location == NSNotFound) continue;
+            NSString *epochStr = [name substringFromIndex:NSMaxRange(marker)];
+            if (!epochStr.length) continue;
+            BOOL allDigits = YES;
+            for (NSUInteger i = 0; i < epochStr.length; i++) {
+                unichar c = [epochStr characterAtIndex:i];
+                if (c < '0' || c > '9') { allDigits = NO; break; }
+            }
+            if (!allDigits) continue;
+            NSTimeInterval entryEpoch = (NSTimeInterval)[epochStr doubleValue];
+            if (nowEpoch - entryEpoch < maxAge) continue;
+            NSString *fullPath = [dir stringByAppendingPathComponent:name];
+            CommandRunner *runner = [CommandRunner shared];
+            [runner run:[NSString stringWithFormat:@"rm -rf %@ 2>/dev/null || true", PXShellQuote(fullPath)]];
+        }
+    }
+}
+
 - (void)restoreBackupAtDirectory:(NSString *)backupDir
                         bundleID:(NSString *)bundleID
                          appName:(NSString *)appName
@@ -1673,6 +1734,36 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
         NSString *activeProfileId = [self _activeProfileId];
         if (manifestProfileId.length && activeProfileId.length && ![manifestProfileId isEqualToString:activeProfileId]) {
             [warnings addObject:[NSString stringWithFormat:@"Backup was created under profile %@ but current profile is %@", manifestProfileId, activeProfileId]];
+        }
+
+        // A4 (Part 2): clean stale quarantine trash (>24h) in the narrow set of
+        // parent directories this restore may touch. Done before extraction so a
+        // fresh quarantine from this run is never eligible for cleanup.
+        {
+            NSMutableSet<NSString *> *trashScanDirs = [NSMutableSet set];
+            NSString *restoreLibBase = [self _mobileLibraryBasePath];
+            if (restoreLibBase.length) {
+                [trashScanDirs addObject:restoreLibBase];
+            }
+            NSDictionary *sharedDBManifest = manifest[@"sharedSystemDB"];
+            if ([sharedDBManifest isKindOfClass:[NSDictionary class]]) {
+                NSArray *files = sharedDBManifest[@"files"];
+                if ([files isKindOfClass:[NSArray class]]) {
+                    for (NSDictionary *d in files) {
+                        if (![d isKindOfClass:[NSDictionary class]]) continue;
+                        NSString *libraryRel = d[@"libraryRel"];
+                        if (![libraryRel isKindOfClass:[NSString class]] || !libraryRel.length) continue;
+                        if (!restoreLibBase.length) continue;
+                        NSString *dest = [restoreLibBase stringByAppendingPathComponent:libraryRel];
+                        NSString *parent = [dest stringByDeletingLastPathComponent];
+                        if (parent.length) {
+                            [trashScanDirs addObject:parent];
+                        }
+                    }
+                }
+            }
+            [self _cleanStaleQuarantineTrashInDirectories:[trashScanDirs allObjects]
+                                                olderThan:86400.0];
         }
 
         // Data container lookup:
@@ -1846,7 +1937,23 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
         PXDebugAppendLine(debugPre, [NSString stringWithFormat:@"stagingData=%@", stagingData ?: @""]);
         PXDebugRun(runner, debugPre, @"du stagingData", [NSString stringWithFormat:@"du -sk %@ 2>/dev/null || true", PXShellQuote(stagingData)]);
         PXDebugRun(runner, debugPre, @"ls container (before wipe)", [NSString stringWithFormat:@"ls -la %@ 2>/dev/null || true", PXShellQuote(dataContainerPath)]);
-        [self _wipeDirectoryContents:dataContainerPath];
+        // A1: hard-fail if the data container could not be fully wiped. Continuing
+        // would clone restored data on top of stale files, mixing old and new
+        // state in the app's primary container.
+        NSArray<NSString *> *wipeFailed = [self _wipeDirectoryContents:dataContainerPath];
+        if (wipeFailed.count) {
+            PXDebugAppendLine(debugPre, [NSString stringWithFormat:@"wipeFailedCount=%lu", (unsigned long)wipeFailed.count]);
+            for (NSString *fp in wipeFailed) {
+                PXDebugAppendLine(debugPre, [NSString stringWithFormat:@"wipeFailed=%@", fp]);
+            }
+            [fm removeItemAtPath:stagingRoot error:nil];
+            NSString *msg = [NSString stringWithFormat:@"Failed to wipe data container before restore (%lu item(s) remained); aborting to avoid mixing stale and restored data", (unsigned long)wipeFailed.count];
+            NSError *err = [NSError errorWithDomain:PXBackupErrorDomain
+                                               code:319
+                                           userInfo:@{NSLocalizedDescriptionKey: msg}];
+            dispatch_async(dispatch_get_main_queue(), ^{ if (completion) completion(nil, err); });
+            return;
+        }
         PXDebugRun(runner, debugPre, @"ls container (after wipe)", [NSString stringWithFormat:@"ls -la %@ 2>/dev/null || true", PXShellQuote(dataContainerPath)]);
         BOOL shouldPreferCpClone = NO;
         if ([tarPath isEqualToString:@"/usr/bin/tar"] || [tarPath isEqualToString:@"/bin/tar"]) {
@@ -1923,7 +2030,11 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
             if (profileAppDataPath.length && [fm fileExistsAtPath:archivePath]) {
                 BOOL isDir = NO;
                 if ([fm fileExistsAtPath:profileAppDataPath isDirectory:&isDir] && isDir) {
-                    [self _wipeDirectoryContents:profileAppDataPath];
+                    // A1: warning-only for non-primary containers; restore continues.
+                    NSArray<NSString *> *pwFailed = [self _wipeDirectoryContents:profileAppDataPath];
+                    if (pwFailed.count) {
+                        [warnings addObject:[NSString stringWithFormat:@"Profile appdata wipe incomplete (%lu item(s) remained); restored data may mix with stale files", (unsigned long)pwFailed.count]];
+                    }
                     CommandResult *r = [self _tarExtract:tarPath archive:archivePath toDir:profileAppDataPath];
                     if (r.exitCode != 0) {
                         NSString *msg = r.stderrString.length ? r.stderrString : @"Failed to restore profile appdata";
@@ -1962,7 +2073,11 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
             if (globalSafariPath.length && [fm fileExistsAtPath:archivePath]) {
                 BOOL isDir = NO;
                 if ([fm fileExistsAtPath:globalSafariPath isDirectory:&isDir] && isDir) {
-                    [self _wipeDirectoryContents:globalSafariPath];
+                    // A1: warning-only for non-primary containers; restore continues.
+                    NSArray<NSString *> *gsFailed = [self _wipeDirectoryContents:globalSafariPath];
+                    if (gsFailed.count) {
+                        [warnings addObject:[NSString stringWithFormat:@"Global Safari wipe incomplete (%lu item(s) remained); restored data may mix with stale files", (unsigned long)gsFailed.count]];
+                    }
                     CommandResult *r = [self _tarExtract:tarPath archive:archivePath toDir:globalSafariPath];
                     if (r.exitCode != 0) {
                         NSString *msg = r.stderrString.length ? r.stderrString : @"Failed to restore global Safari library";
@@ -1995,7 +2110,11 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
             PXDebugHeader(debugPre, [NSString stringWithFormat:@"Group Restore: %@", info.groupID ?: @""]);
             PXDebugAppendLine(debugPre, [NSString stringWithFormat:@"groupPath=%@", info.path ?: @""]);
             PXDebugRun(runner, debugPre, @"ls group (before)", [NSString stringWithFormat:@"ls -la %@ 2>/dev/null || true", PXShellQuote(info.path)]);
-            [self _wipeDirectoryContents:info.path];
+            // A1: warning-only for app group containers; restore continues.
+            NSArray<NSString *> *grpFailed = [self _wipeDirectoryContents:info.path];
+            if (grpFailed.count) {
+                [warnings addObject:[NSString stringWithFormat:@"Group %@ wipe incomplete (%lu item(s) remained); restored data may mix with stale files", info.groupID ?: @"", (unsigned long)grpFailed.count]];
+            }
             PXDebugRun(runner, debugPre, @"ls group (after wipe)", [NSString stringWithFormat:@"ls -la %@ 2>/dev/null || true", PXShellQuote(info.path)]);
 
             NSString *archiveName = [NSString stringWithFormat:@"%@.tar.gz", PXSanitizeFilenameComponent(info.groupID)];
@@ -2069,6 +2188,10 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
                     dispatch_async(dispatch_get_main_queue(), ^{ if (completion) completion(nil, err); });
                     return;
                 }
+                // A4: extract succeeded; remove the quarantined trash for this dest now.
+                if (trash.length && [fm fileExistsAtPath:trash]) {
+                    [runner run:[NSString stringWithFormat:@"rm -rf %@ 2>/dev/null || true", PXShellQuote(trash)]];
+                }
                 [runner run:[NSString stringWithFormat:@"chown -R mobile:mobile %@ 2>/dev/null || true", PXShellQuote(dest)]];
             }
         }
@@ -2089,15 +2212,23 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
             NSString *libBase = [self _mobileLibraryBasePath];
 
             // Stop common daemons that may hold these DBs.
-            PXKillallByName(@"accountsd", SIGTERM);
-            PXKillallByName(@"calaccessd", SIGTERM);
-            PXKillallByName(@"imagent", SIGTERM);
-            PXKillallByName(@"MobileSMS", SIGTERM);
-            [NSThread sleepForTimeInterval:0.2];
-            PXKillallByName(@"accountsd", SIGKILL);
-            PXKillallByName(@"calaccessd", SIGKILL);
-            PXKillallByName(@"imagent", SIGKILL);
-            PXKillallByName(@"MobileSMS", SIGKILL);
+            // A3: poll for actual exit instead of a fixed 0.2s sleep. Send
+            // SIGTERM, wait (bounded) for the daemons to leave the process
+            // table, then SIGKILL any that are still alive as a fallback.
+            NSArray<NSString *> *dbDaemons = @[@"accountsd", @"calaccessd", @"imagent", @"MobileSMS"];
+            for (NSString *d in dbDaemons) {
+                PXKillallByName(d, SIGTERM);
+            }
+            if (!PXWaitForProcessesToExit(dbDaemons, 2.0)) {
+                // Some daemon did not exit within the grace window; force-kill
+                // the stragglers and give them a brief moment to disappear.
+                for (NSString *d in dbDaemons) {
+                    if (PXProcessIsRunning(d)) {
+                        PXKillallByName(d, SIGKILL);
+                    }
+                }
+                PXWaitForProcessesToExit(dbDaemons, 0.5);
+            }
 
             for (NSDictionary *it in (NSArray *)dbFiles) {
                 if (![it isKindOfClass:[NSDictionary class]]) continue;
@@ -2123,6 +2254,10 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
                 [runner run:[NSString stringWithFormat:@"cp -a %@ %@ 2>/dev/null || true", PXShellQuote(src), PXShellQuote(dest)]];
                 [runner run:[NSString stringWithFormat:@"chown mobile:mobile %@ 2>/dev/null || true", PXShellQuote(dest)]];
                 [runner run:[NSString stringWithFormat:@"chmod 600 %@ 2>/dev/null || true", PXShellQuote(dest)]];
+                // A4: copy verified by destination existence; remove this dest's trash now.
+                if (trash.length && [fm fileExistsAtPath:dest] && [fm fileExistsAtPath:trash]) {
+                    [runner run:[NSString stringWithFormat:@"rm -rf %@ 2>/dev/null || true", PXShellQuote(trash)]];
+                }
             }
 
             [warnings addObject:@"Restored shared system DBs (this may affect multiple apps)"];
@@ -2144,6 +2279,11 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
             NSString *prefBackup = [[backupDir stringByAppendingPathComponent:@"preferences"] stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.plist", bundleID]];
             NSString *prefDest = [self _preferencesPlistPathForBundleID:bundleID];
             if ([fm fileExistsAtPath:prefBackup]) {
+                // A2: kill cfprefsd BEFORE copying the plist so its in-memory cache
+                // cannot flush stale values back over the freshly copied file
+                // during the copy. Kill again afterwards to force a reload from
+                // the new file on next access.
+                PXKillallByName(@"cfprefsd", SIGTERM);
                 [runner run:[NSString stringWithFormat:@"cp -f %@ %@ 2>/dev/null || true", PXShellQuote(prefBackup), PXShellQuote(prefDest)]];
                 [runner run:[NSString stringWithFormat:@"chown mobile:mobile %@ 2>/dev/null || true", PXShellQuote(prefDest)]];
                 [runner run:[NSString stringWithFormat:@"chmod 644 %@ 2>/dev/null || true", PXShellQuote(prefDest)]];

@@ -92,6 +92,37 @@ static NSSet<NSString *> *PXExcludedRestoreAttributes(void) {
     return excluded;
 }
 
+/// Serialize a single keychain item dictionary into a plist-safe export dictionary.
+/// NSData -> base64, NSDate -> timestamp, NSNumber/NSString kept as-is.
+/// Non-serializable values (e.g. SecAccessControlRef) are skipped.
+static NSDictionary *PXSerializeKeychainItem(NSDictionary *item, CFTypeRef secClass) {
+    NSMutableDictionary *exportItem = [NSMutableDictionary dictionary];
+    exportItem[@"_class"] = PXKeychainClassName(secClass);
+    exportItem[@"_secClass"] = (__bridge id)secClass;
+
+    for (NSString *key in item) {
+        id value = item[key];
+
+        if ([value isKindOfClass:[NSData class]]) {
+            exportItem[key] = @{
+                @"_type": @"data",
+                @"_base64": [(NSData *)value base64EncodedStringWithOptions:0]
+            };
+        } else if ([value isKindOfClass:[NSDate class]]) {
+            exportItem[key] = @{
+                @"_type": @"date",
+                @"_timestamp": @([(NSDate *)value timeIntervalSince1970])
+            };
+        } else if ([value isKindOfClass:[NSNumber class]] ||
+                   [value isKindOfClass:[NSString class]]) {
+            exportItem[key] = value;
+        }
+        // Skip non-serializable types (e.g. SecAccessControlRef).
+    }
+
+    return exportItem;
+}
+
 #pragma mark - Implementation
 
 @implementation KeychainBackupHelper
@@ -124,94 +155,20 @@ static NSSet<NSString *> *PXExcludedRestoreAttributes(void) {
     NSMutableArray<NSString *> *warnings = [NSMutableArray array];
     NSMutableArray<NSString *> *errors = [NSMutableArray array];
     NSMutableArray<NSDictionary *> *allItems = [NSMutableArray array];
-    
-    // Iterate through each keychain class.
-    for (NSNumber *classNum in PXAllKeychainClasses()) {
-        PXKeychainItemClass classType = [classNum unsignedIntegerValue];
-        if (!(itemClasses & classType)) {
-            continue;
-        }
-        
-        CFTypeRef secClass = PXSecItemClassFromType(classType);
-        if (!secClass) continue;
-        
-        // Query for all items of this class with matching access groups.
-        NSMutableDictionary *query = [@{
-            (__bridge id)kSecClass: (__bridge id)secClass,
-            (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitAll,
-            (__bridge id)kSecReturnAttributes: @YES,
-            (__bridge id)kSecReturnData: @YES,
-            (__bridge id)kSecAttrSynchronizable: (__bridge id)kSecAttrSynchronizableAny,
-            (__bridge id)kSecAttrAccessGroup: groups.firstObject, // Primary group
-        } mutableCopy];
-        PXAddAuthUIFlags(query);
-        
-        CFTypeRef cfResult = NULL;
-        OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &cfResult);
-        
-        if (status == errSecItemNotFound) {
-            // No items of this class - not an error.
-            continue;
-        }
-        
-        if (status != errSecSuccess) {
-            NSString *msg = [NSString stringWithFormat:@"Failed to query %@: %@",
-                            PXKeychainClassName(secClass), PXSecurityErrorDescription(status)];
-            [warnings addObject:msg];
-            continue;
-        }
-        
-        NSArray *items = (__bridge_transfer NSArray *)cfResult;
-        if (![items isKindOfClass:[NSArray class]]) {
-            items = @[items];
-        }
-        
-        for (NSDictionary *item in items) {
-            result.itemsProcessed++;
-            
-            // Create a serializable copy of the item.
-            NSMutableDictionary *exportItem = [NSMutableDictionary dictionary];
-            exportItem[@"_class"] = PXKeychainClassName(secClass);
-            exportItem[@"_secClass"] = (__bridge id)secClass;
-            
-            for (NSString *key in item) {
-                id value = item[key];
-                
-                // Convert NSData to base64 for serialization.
-                if ([value isKindOfClass:[NSData class]]) {
-                    exportItem[key] = @{
-                        @"_type": @"data",
-                        @"_base64": [(NSData *)value base64EncodedStringWithOptions:0]
-                    };
-                } else if ([value isKindOfClass:[NSDate class]]) {
-                    exportItem[key] = @{
-                        @"_type": @"date",
-                        @"_timestamp": @([(NSDate *)value timeIntervalSince1970])
-                    };
-                } else if ([value isKindOfClass:[NSNumber class]] ||
-                           [value isKindOfClass:[NSString class]]) {
-                    exportItem[key] = value;
-                }
-                // Skip non-serializable types
-            }
-            
-            [allItems addObject:exportItem];
-            result.itemsSucceeded++;
-        }
-    }
-    
-    // Also try querying without access group restriction if we have special entitlements.
-    // This catches items that might use different access groups we're also entitled to.
+
+    // B4: Unified query loop over (group x class). Each pair is queried exactly
+    // once, removing the previous dependency on groups.firstObject and the
+    // duplicated second pass.
     for (NSString *group in groups) {
-        if ([group isEqualToString:groups.firstObject]) continue; // Already queried
-        
+        if (![group isKindOfClass:[NSString class]] || group.length == 0) continue;
+
         for (NSNumber *classNum in PXAllKeychainClasses()) {
             PXKeychainItemClass classType = [classNum unsignedIntegerValue];
             if (!(itemClasses & classType)) continue;
-            
+
             CFTypeRef secClass = PXSecItemClassFromType(classType);
             if (!secClass) continue;
-            
+
             NSMutableDictionary *query = [@{
                 (__bridge id)kSecClass: (__bridge id)secClass,
                 (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitAll,
@@ -221,42 +178,30 @@ static NSSet<NSString *> *PXExcludedRestoreAttributes(void) {
                 (__bridge id)kSecAttrAccessGroup: group,
             } mutableCopy];
             PXAddAuthUIFlags(query);
-            
+
             CFTypeRef cfResult = NULL;
             OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &cfResult);
-            
-            if (status != errSecSuccess) continue;
-            
+
+            if (status == errSecItemNotFound) {
+                // No items of this class/group - not an error.
+                continue;
+            }
+
+            if (status != errSecSuccess) {
+                NSString *msg = [NSString stringWithFormat:@"Failed to query %@ in group %@: %@",
+                                PXKeychainClassName(secClass), group, PXSecurityErrorDescription(status)];
+                [warnings addObject:msg];
+                continue;
+            }
+
             NSArray *items = (__bridge_transfer NSArray *)cfResult;
             if (![items isKindOfClass:[NSArray class]]) {
                 items = @[items];
             }
-            
+
             for (NSDictionary *item in items) {
                 result.itemsProcessed++;
-                
-                NSMutableDictionary *exportItem = [NSMutableDictionary dictionary];
-                exportItem[@"_class"] = PXKeychainClassName(secClass);
-                exportItem[@"_secClass"] = (__bridge id)secClass;
-                
-                for (NSString *key in item) {
-                    id value = item[key];
-                    if ([value isKindOfClass:[NSData class]]) {
-                        exportItem[key] = @{
-                            @"_type": @"data",
-                            @"_base64": [(NSData *)value base64EncodedStringWithOptions:0]
-                        };
-                    } else if ([value isKindOfClass:[NSDate class]]) {
-                        exportItem[key] = @{
-                            @"_type": @"date",
-                            @"_timestamp": @([(NSDate *)value timeIntervalSince1970])
-                        };
-                    } else if ([value isKindOfClass:[NSNumber class]] ||
-                               [value isKindOfClass:[NSString class]]) {
-                        exportItem[key] = value;
-                    }
-                }
-                
+                NSDictionary *exportItem = PXSerializeKeychainItem(item, secClass);
                 [allItems addObject:exportItem];
                 result.itemsSucceeded++;
             }
@@ -358,39 +303,37 @@ static NSSet<NSString *> *PXExcludedRestoreAttributes(void) {
     NSMutableArray<NSString *> *errors = [NSMutableArray array];
     NSSet<NSString *> *excluded = PXExcludedRestoreAttributes();
 
-    // If overwrite, wipe target groups/classes up-front to avoid duplicate items
-    // due to incomplete per-item delete queries.
+    // B2: If overwrite, wipe ALL classes in each target group up-front (not just
+    // the classes present in the backup file). This makes restore a true
+    // whole-group replacement and prevents stale items of a class that the
+    // backup happens not to contain from surviving.
     if (overwrite) {
         NSArray<NSString *> *groups = [backup[@"accessGroups"] isKindOfClass:[NSArray class]] ? backup[@"accessGroups"] : @[];
-        NSMutableSet *classes = [NSMutableSet set];
-        for (NSDictionary *item in items) {
-            if (![item isKindOfClass:[NSDictionary class]]) continue;
-            id secClassValue = item[@"_secClass"];
-            if (secClassValue) {
-                [classes addObject:secClassValue];
-            }
-        }
 
         for (NSString *group in groups) {
             if (![group isKindOfClass:[NSString class]] || group.length == 0) continue;
-            for (id secClassValue in classes) {
-                if (!secClassValue) continue;
+            for (NSNumber *classNum in PXAllKeychainClasses()) {
+                PXKeychainItemClass classType = [classNum unsignedIntegerValue];
+                CFTypeRef secClass = PXSecItemClassFromType(classType);
+                if (!secClass) continue;
                 NSMutableDictionary *q = [NSMutableDictionary dictionary];
-                q[(__bridge id)kSecClass] = secClassValue;
+                q[(__bridge id)kSecClass] = (__bridge id)secClass;
                 q[(__bridge id)kSecAttrAccessGroup] = group;
-                // Include synchronizable items too.
+                // Include synchronizable items too (B1: SynchronizableAny retained per decision).
                 q[(__bridge id)kSecAttrSynchronizable] = (__bridge id)kSecAttrSynchronizableAny;
                 OSStatus st = SecItemDelete((__bridge CFDictionaryRef)q);
                 if (st != errSecSuccess && st != errSecItemNotFound) {
                     [warnings addObject:[NSString stringWithFormat:@"Pre-wipe failed for %@/%@: %@",
                                          group,
-                                         secClassValue,
+                                         PXKeychainClassName(secClass),
                                          PXSecurityErrorDescription(st)]];
                 }
             }
         }
     }
     
+    NSString *accessControlKey = (__bridge NSString *)kSecAttrAccessControl;
+
     for (NSDictionary *item in items) {
         if (![item isKindOfClass:[NSDictionary class]]) continue;
         result.itemsProcessed++;
@@ -401,6 +344,18 @@ static NSSet<NSString *> *PXExcludedRestoreAttributes(void) {
             [warnings addObject:@"Item missing _secClass"];
             result.itemsFailed++;
             continue;
+        }
+
+        // B3 (Plan A): items created via SecAccessControlRef (biometric/passcode)
+        // expose kSecAttrAccessControl, which is a non-serializable object and was
+        // dropped at backup time. Such items are restored best-effort with the
+        // default protection class; warn so the user knows the original
+        // protection class (e.g. biometric/passcode gating) is not preserved.
+        if (item[accessControlKey] != nil) {
+            NSString *acct = item[(__bridge id)kSecAttrAccount];
+            NSString *svc = item[(__bridge id)kSecAttrService];
+            [warnings addObject:[NSString stringWithFormat:@"Item (acct=%@ svc=%@) used an access-control object; original protection class not preserved on restore",
+                                 acct ?: @"", svc ?: @""]];
         }
         
         // Build the add query.

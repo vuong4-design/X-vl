@@ -24,6 +24,9 @@
 #import <sys/mount.h>
 #import <sys/statvfs.h>
 #import <sys/sysctl.h>
+#if __has_include(<sys/attr.h>)
+#import <sys/attr.h>
+#endif
 #if __has_include(<sys/user.h>)
 #import <sys/user.h>
 #endif
@@ -207,8 +210,41 @@ static volatile BOOL gJBSysctlProcSanitizeEnabled = NO;
 static volatile BOOL gJBHideProcMapsEnabled = NO;
 static volatile BOOL gJBHideObjcImagesEnabled = NO;
 static volatile BOOL gJBHookSandboxCheckEnabled = NO;
+static volatile BOOL gJBHookFstatPathEnabled = NO;
+static volatile BOOL gJBHookGetattrlistEnabled = NO;
+static volatile BOOL gJBHookExecEnabled = NO;
+static volatile BOOL gJBHideProcInfoEnabled = NO;
 static volatile BOOL gJBDebugLoggingEnabled = NO;
 static volatile CFTimeInterval gJBLastCheck = 0;
+// A5: Static toggles (the jbBypass* flags) change only when the user edits
+// settings and the app relaunches; they do not need to be re-read every
+// cache cycle. We load them once via dispatch_once. The hot 1-second cache
+// then only re-evaluates gJBEnabled (which depends on isApplicationEnabled).
+// NOTE: the gJB*Enabled flags are plain volatile BOOLs read without atomics
+// from arbitrary threads. Since they are written once (dispatch_once) before
+// most hooks run, and are simple booleans, torn reads are not a concern.
+static void PXJBLoadStaticTogglesOnce(NSUserDefaults *securitySettings) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        gJBStatfsEnabled = [securitySettings boolForKey:@"jbBypassStatfsEnabled"];
+        gJBHideDylibsEnabled = [securitySettings boolForKey:@"jbBypassHideDylibsEnabled"];
+        gJBSyscallHookEnabled = [securitySettings boolForKey:@"jbBypassHookSyscallFallbackEnabled"];
+        gJBBlockDyldAddImageCallbacksEnabled = [securitySettings boolForKey:@"jbBypassBlockDyldAddImageCallbacksEnabled"];
+        gJBHideTaskDyldInfoEnabled = [securitySettings boolForKey:@"jbBypassHideTaskDyldInfoEnabled"];
+        gJBHideDlIteratePhdrEnabled = [securitySettings boolForKey:@"jbBypassHideDlIteratePhdrEnabled"];
+        gJBBlockDlopenDlsymProbesEnabled = [securitySettings boolForKey:@"jbBypassBlockDlopenDlsymProbesEnabled"];
+        gJBSysctlProcSanitizeEnabled = [securitySettings boolForKey:@"jbBypassSysctlProcSanitizeEnabled"];
+        gJBHideProcMapsEnabled = [securitySettings boolForKey:@"jbBypassHideProcMapsEnabled"];
+        gJBHideObjcImagesEnabled = [securitySettings boolForKey:@"jbBypassHideObjcImagesEnabled"];
+        gJBHookSandboxCheckEnabled = [securitySettings boolForKey:@"jbBypassHookSandboxCheckEnabled"];
+        gJBHookFstatPathEnabled = [securitySettings boolForKey:@"jbBypassHookFstatPathEnabled"];
+        gJBHookGetattrlistEnabled = [securitySettings boolForKey:@"jbBypassHookGetattrlistEnabled"];
+        gJBHookExecEnabled = [securitySettings boolForKey:@"jbBypassHookExecEnabled"];
+        gJBHideProcInfoEnabled = [securitySettings boolForKey:@"jbBypassHideProcInfoEnabled"];
+        gJBDebugLoggingEnabled = [securitySettings boolForKey:@"jbBypassDebugLoggingEnabled"];
+    });
+}
+
 static BOOL PXJBShouldBypassCached(void) {
     if (PXJBIsCriticalProcess()) return NO;
     CFTimeInterval now = CFAbsoluteTimeGetCurrent();
@@ -240,41 +276,8 @@ static BOOL PXJBShouldBypassCached(void) {
             return gJBEnabled;
         }
 
-        // Phase 2 extension toggle: mount/volume checks via statfs/statvfs.
-        gJBStatfsEnabled = [securitySettings boolForKey:@"jbBypassStatfsEnabled"]; // default OFF
-
-        // Phase 3 toggle: hide jailbreak-related dylibs from dyld enumeration.
-        gJBHideDylibsEnabled = [securitySettings boolForKey:@"jbBypassHideDylibsEnabled"]; // default OFF
-
-        // Phase 2 extension toggle: syscall() fallback (EXPERIMENTAL; default OFF)
-        gJBSyscallHookEnabled = [securitySettings boolForKey:@"jbBypassHookSyscallFallbackEnabled"]; 
-
-        // Phase 3 extension toggle: block suspicious dyld add_image callbacks (default OFF)
-        gJBBlockDyldAddImageCallbacksEnabled = [securitySettings boolForKey:@"jbBypassBlockDyldAddImageCallbacksEnabled"]; 
-
-        // Phase 3 extension toggle: hide TASK_DYLD_INFO via task_info (default OFF)
-        gJBHideTaskDyldInfoEnabled = [securitySettings boolForKey:@"jbBypassHideTaskDyldInfoEnabled"]; 
-
-        // Phase 3 extension toggle: hide dl_iterate_phdr image enumeration (default OFF)
-        gJBHideDlIteratePhdrEnabled = [securitySettings boolForKey:@"jbBypassHideDlIteratePhdrEnabled"]; 
-
-        // Phase 3 extension toggle: block dlopen/dlsym probing for jailbreak tooling (default OFF)
-        gJBBlockDlopenDlsymProbesEnabled = [securitySettings boolForKey:@"jbBypassBlockDlopenDlsymProbesEnabled"]; 
-
-        // Phase 3 extension toggle: sanitize sysctl/sysctlbyname proc/debug/bootargs (default OFF)
-        gJBSysctlProcSanitizeEnabled = [securitySettings boolForKey:@"jbBypassSysctlProcSanitizeEnabled"]; 
-
-        // Phase 3 extension toggle: hide libproc-based map filename queries (default OFF)
-        gJBHideProcMapsEnabled = [securitySettings boolForKey:@"jbBypassHideProcMapsEnabled"]; 
-
-        // Phase 3 extension toggle: hide ObjC runtime image list (default OFF)
-        gJBHideObjcImagesEnabled = [securitySettings boolForKey:@"jbBypassHideObjcImagesEnabled"]; 
-
-        // Phase 3 extension toggle: hook sandbox_check (default OFF)
-        gJBHookSandboxCheckEnabled = [securitySettings boolForKey:@"jbBypassHookSandboxCheckEnabled"]; 
-
-        // Debug: log blocked operations (default OFF)
-        gJBDebugLoggingEnabled = [securitySettings boolForKey:@"jbBypassDebugLoggingEnabled"]; 
+        // Load the static jbBypass* toggles exactly once.
+        PXJBLoadStaticTogglesOnce(securitySettings);
 
         Class mgrCls = NSClassFromString(@"IdentifierManager");
         if (!mgrCls || ![mgrCls respondsToSelector:@selector(sharedManager)]) {
@@ -332,6 +335,22 @@ static BOOL PXJBHideObjcImagesEnabled(void) {
 
 static BOOL PXJBHookSandboxCheckEnabled(void) {
     return PXJBShouldBypassCached() && gJBHookSandboxCheckEnabled;
+}
+
+static BOOL PXJBHookFstatPathEnabled(void) {
+    return PXJBShouldBypassCached() && gJBHookFstatPathEnabled;
+}
+
+static BOOL PXJBHookGetattrlistEnabled(void) {
+    return PXJBShouldBypassCached() && gJBHookGetattrlistEnabled;
+}
+
+static BOOL PXJBHookExecEnabled(void) {
+    return PXJBShouldBypassCached() && gJBHookExecEnabled;
+}
+
+static BOOL PXJBHideProcInfoEnabled(void) {
+    return PXJBShouldBypassCached() && gJBHideProcInfoEnabled;
 }
 
 static BOOL PXJBDebugLoggingEnabled(void) {
@@ -763,6 +782,28 @@ static BOOL PXJBNormalizeAbsolutePath(const char *inPath, char *out, size_t outs
     return YES;
 }
 
+// Re-entrancy guard for getcwd-based resolution.
+// getcwd() may internally call open()/stat()/__getcwd, which we hook. Without
+// a guard, hook_openat -> PXJBJoinCwdAndNormalize -> getcwd -> hook_open(at)
+// could recurse or add cost on a hot path. We use a thread-local flag so the
+// resolver is skipped if we're already inside it on this thread.
+static pthread_key_t gPXJBCwdGuardKey;
+static pthread_once_t gPXJBCwdGuardOnce = PTHREAD_ONCE_INIT;
+static void PXJBCwdGuardKeyInit(void) {
+    pthread_key_create(&gPXJBCwdGuardKey, NULL);
+}
+static BOOL PXJBCwdGuardEnter(void) {
+    pthread_once(&gPXJBCwdGuardOnce, PXJBCwdGuardKeyInit);
+    if (pthread_getspecific(gPXJBCwdGuardKey) != NULL) {
+        return NO; // already inside on this thread
+    }
+    pthread_setspecific(gPXJBCwdGuardKey, (void *)1);
+    return YES;
+}
+static void PXJBCwdGuardLeave(void) {
+    pthread_setspecific(gPXJBCwdGuardKey, NULL);
+}
+
 static BOOL PXJBJoinCwdAndNormalize(const char *relPath, char *out, size_t outsz) {
     if (!relPath || !out || outsz < 2) return NO;
     char cwd[PATH_MAX];
@@ -801,7 +842,10 @@ static int hook_openat(int fd, const char *path, int oflag, ...) {
 #endif
                 if (fd == AT_FDCWD) {
                     char normalized[PATH_MAX];
-                    if (PXJBJoinCwdAndNormalize(path, normalized, sizeof(normalized))) {
+                    BOOL guardOk = PXJBCwdGuardEnter();
+                    BOOL resolved = guardOk && PXJBJoinCwdAndNormalize(path, normalized, sizeof(normalized));
+                    if (guardOk) PXJBCwdGuardLeave();
+                    if (resolved) {
                         if (PXJBPathShouldHide(normalized)) {
                             PXJBLogBlockedOncePerSecond("openat", normalized);
                             errno = ENOENT;
@@ -869,17 +913,79 @@ static DIR *hook_opendir(const char *path) {
     return orig_opendir ? orig_opendir(path) : NULL;
 }
 
+// A6: readdir now hides entries by building the full path of each entry and
+// running it through PXJBPathShouldHide, instead of a hardcoded 4-name list.
+// To avoid resolving the directory's path on every entry (readdir is called
+// once per entry), we resolve DIR* -> dir path once via dirfd()+F_GETPATH and
+// cache it per DIR*. The cache is a tiny fixed ring keyed by the DIR pointer.
+//
+// PERF/RISK NOTE: the per-DIR resolve costs one fcntl(F_GETPATH) the first
+// time we see a given DIR*; subsequent entries reuse the cached path. The
+// cache is intentionally small and lock-protected to stay thread-safe without
+// adding meaningful overhead on the listing hot path.
+#define PXJB_DIRPATH_CACHE_SLOTS 16
+typedef struct {
+    DIR *dirp;
+    char path[PATH_MAX];
+} PXJBDirPathEntry;
+static PXJBDirPathEntry gPXJBDirPathCache[PXJB_DIRPATH_CACHE_SLOTS];
+static uint32_t gPXJBDirPathNext = 0;
+static pthread_mutex_t gPXJBDirPathLock = PTHREAD_MUTEX_INITIALIZER;
+
+static BOOL PXJBResolveDirPath(DIR *dirp, char *out, size_t outsz) {
+    if (!dirp || !out || outsz < 2) return NO;
+    pthread_mutex_lock(&gPXJBDirPathLock);
+    for (int i = 0; i < PXJB_DIRPATH_CACHE_SLOTS; i++) {
+        if (gPXJBDirPathCache[i].dirp == dirp && gPXJBDirPathCache[i].path[0]) {
+            strlcpy(out, gPXJBDirPathCache[i].path, outsz);
+            pthread_mutex_unlock(&gPXJBDirPathLock);
+            return YES;
+        }
+    }
+    pthread_mutex_unlock(&gPXJBDirPathLock);
+
+    int fd = dirfd(dirp);
+    if (fd < 0) return NO;
+    char resolved[PATH_MAX];
+    resolved[0] = '\0';
+    if (fcntl(fd, F_GETPATH, resolved) != 0 || !resolved[0]) return NO;
+
+    pthread_mutex_lock(&gPXJBDirPathLock);
+    uint32_t slot = gPXJBDirPathNext % PXJB_DIRPATH_CACHE_SLOTS;
+    gPXJBDirPathNext++;
+    gPXJBDirPathCache[slot].dirp = dirp;
+    strlcpy(gPXJBDirPathCache[slot].path, resolved, sizeof(gPXJBDirPathCache[slot].path));
+    pthread_mutex_unlock(&gPXJBDirPathLock);
+
+    strlcpy(out, resolved, outsz);
+    return YES;
+}
+
 static struct dirent *(*orig_readdir)(DIR *);
 static struct dirent *hook_readdir(DIR *dirp) {
     if (!orig_readdir) return NULL;
     struct dirent *ent = orig_readdir(dirp);
     if (!PXJBShouldBypassCached()) return ent;
 
-    // Hide common jailbreak app names if a directory listing is used.
+    char dirpath[PATH_MAX];
+    BOOL haveDir = PXJBResolveDirPath(dirp, dirpath, sizeof(dirpath));
+
     while (ent) {
         const char *n = ent->d_name;
-        if (n) {
-            if (PXStrEqNoCase(n, "Cydia.app") || PXStrEqNoCase(n, "Sileo.app") || PXStrEqNoCase(n, "Zebra.app") || PXStrEqNoCase(n, "Filza.app")) {
+        if (n && !(n[0] == '.' && (n[1] == '\0' || (n[1] == '.' && n[2] == '\0')))) {
+            BOOL hide = NO;
+            if (haveDir) {
+                char full[PATH_MAX];
+                int w = snprintf(full, sizeof(full), "%s/%s", dirpath, n);
+                if (w > 0 && (size_t)w < sizeof(full) && PXJBPathShouldHide(full)) {
+                    hide = YES;
+                }
+            }
+            // Fallback to name-only check when the dir path could not be resolved.
+            if (!hide && !haveDir && PXJBPathShouldHide(n)) {
+                hide = YES;
+            }
+            if (hide) {
                 ent = orig_readdir(dirp);
                 continue;
             }
@@ -1015,15 +1121,52 @@ static pid_t hook_vfork(void) {
 }
 
 // Hook syscall() as a fallback when apps bypass libc wrappers.
+//
+// RISK NOTE (EXPERIMENTAL, default OFF):
+// syscall() is fully variadic with no portable way to know the real arg
+// count for an arbitrary syscall number. The previous implementation read
+// 6 varargs unconditionally for EVERY syscall, which is undefined behavior
+// when the real syscall takes fewer args. We now:
+//   1. Only read the exact number of args each WHITELISTED syscall uses
+//      (the ones we actually inspect: open/stat/lstat/access/openat).
+//   2. For every other syscall, forward by re-reading 6 slots and passing
+//      them through. This is still technically an over-read for short
+//      syscalls, but on arm64 these slots come from registers, so it is
+//      effectively benign. This path only runs when the toggle is enabled.
+// Because there is no fully ABI-conforming generic forwarder for variadic
+// syscall(), this hook stays EXPERIMENTAL and OFF by default.
 static long (*orig_syscall)(long number, ...);
+
+static BOOL PXJBSyscallIsInspected(int number) {
+    switch (number) {
+        case SYS_stat:
+        case SYS_lstat:
+        case SYS_access:
+        case SYS_open:
+        case SYS_openat:
+#ifdef SYS_stat64
+        case SYS_stat64:
+#endif
+#ifdef SYS_lstat64
+        case SYS_lstat64:
+#endif
+            return YES;
+        default:
+            return NO;
+    }
+}
+
 static long hook_syscall(long number, ...) {
     if (!orig_syscall) {
         errno = ENOSYS;
         return -1;
     }
 
-    if (!PXJBSyscallBypassEnabled()) {
-        // Forward without inspecting. We still have to consume varargs to call the function pointer.
+    int n = (int)number;
+
+    // Fast path: not enabled, or a syscall we never inspect. Forward by
+    // capturing 6 generic slots (register-backed on arm64) and passing through.
+    if (!PXJBSyscallBypassEnabled() || !PXJBSyscallIsInspected(n)) {
         uint64_t a1 = 0, a2 = 0, a3 = 0, a4 = 0, a5 = 0, a6 = 0;
         va_list ap;
         va_start(ap, number);
@@ -1037,66 +1180,75 @@ static long hook_syscall(long number, ...) {
         return orig_syscall(number, a1, a2, a3, a4, a5, a6);
     }
 
-    // Pull up to 6 args as 64-bit values (covers common syscalls).
-    uint64_t a1 = 0, a2 = 0, a3 = 0, a4 = 0, a5 = 0, a6 = 0;
+    // Inspected syscalls: read only the args each one actually defines.
     va_list ap;
     va_start(ap, number);
-    a1 = (uint64_t)va_arg(ap, uint64_t);
-    a2 = (uint64_t)va_arg(ap, uint64_t);
-    a3 = (uint64_t)va_arg(ap, uint64_t);
-    a4 = (uint64_t)va_arg(ap, uint64_t);
-    a5 = (uint64_t)va_arg(ap, uint64_t);
-    a6 = (uint64_t)va_arg(ap, uint64_t);
-    va_end(ap);
 
-    if (PXJBSyscallBypassEnabled()) {
-        const char *path = NULL;
-
-        switch ((int)number) {
-            case SYS_stat:
-            case SYS_lstat:
-            case SYS_access:
-            case SYS_open:
-            #ifdef SYS_stat64
-            case SYS_stat64:
-            #endif
-            #ifdef SYS_lstat64
-            case SYS_lstat64:
-            #endif
-                path = (const char *)(uintptr_t)a1;
-                if (PXJBPathShouldHide(path)) {
-                    errno = ENOENT;
-                    return -1;
-                }
-                if (((int)number) == SYS_open) {
-                    int flags = (int)a2;
-                    if (PXJBWriteCheckShouldBlock(path, flags)) {
-                        errno = EACCES;
-                        return -1;
-                    }
-                }
-                break;
-
-            case SYS_openat: {
-                path = (const char *)(uintptr_t)a2;
-                if (path && path[0] == '/' && PXJBPathShouldHide(path)) {
-                    errno = ENOENT;
-                    return -1;
-                }
-                int flags = (int)a3;
-                if (path && path[0] == '/' && PXJBWriteCheckShouldBlock(path, flags)) {
-                    errno = EACCES;
-                    return -1;
-                }
-                break;
+    switch (n) {
+        case SYS_stat:
+        case SYS_lstat:
+        case SYS_access:
+#ifdef SYS_stat64
+        case SYS_stat64:
+#endif
+#ifdef SYS_lstat64
+        case SYS_lstat64:
+#endif
+        {
+            // (const char *path, <buf|mode>)
+            uint64_t a1 = (uint64_t)va_arg(ap, uint64_t);
+            uint64_t a2 = (uint64_t)va_arg(ap, uint64_t);
+            va_end(ap);
+            const char *path = (const char *)(uintptr_t)a1;
+            if (PXJBPathShouldHide(path)) {
+                errno = ENOENT;
+                return -1;
             }
-            default:
-                break;
+            return orig_syscall(number, a1, a2);
         }
-    }
 
-    // Forward to original syscall with the same captured args. Extra args are ignored by callee.
-    return orig_syscall(number, a1, a2, a3, a4, a5, a6);
+        case SYS_open: {
+            // (const char *path, int flags, mode_t mode)
+            uint64_t a1 = (uint64_t)va_arg(ap, uint64_t);
+            uint64_t a2 = (uint64_t)va_arg(ap, uint64_t);
+            uint64_t a3 = (uint64_t)va_arg(ap, uint64_t);
+            va_end(ap);
+            const char *path = (const char *)(uintptr_t)a1;
+            if (PXJBPathShouldHide(path)) {
+                errno = ENOENT;
+                return -1;
+            }
+            if (PXJBWriteCheckShouldBlock(path, (int)a2)) {
+                errno = EACCES;
+                return -1;
+            }
+            return orig_syscall(number, a1, a2, a3);
+        }
+
+        case SYS_openat: {
+            // (int fd, const char *path, int flags, mode_t mode)
+            uint64_t a1 = (uint64_t)va_arg(ap, uint64_t);
+            uint64_t a2 = (uint64_t)va_arg(ap, uint64_t);
+            uint64_t a3 = (uint64_t)va_arg(ap, uint64_t);
+            uint64_t a4 = (uint64_t)va_arg(ap, uint64_t);
+            va_end(ap);
+            const char *path = (const char *)(uintptr_t)a2;
+            if (path && path[0] == '/' && PXJBPathShouldHide(path)) {
+                errno = ENOENT;
+                return -1;
+            }
+            if (path && path[0] == '/' && PXJBWriteCheckShouldBlock(path, (int)a3)) {
+                errno = EACCES;
+                return -1;
+            }
+            return orig_syscall(number, a1, a2, a3, a4);
+        }
+
+        default:
+            // Unreachable (PXJBSyscallIsInspected gated above), but stay safe.
+            va_end(ap);
+            return orig_syscall(number);
+    }
 }
 
 // Block common jailbreak probe commands executed via system()/popen().
@@ -1212,6 +1364,40 @@ static int hook_posix_spawnp(pid_t *restrict pid, const char *restrict file, con
         return -1;
     }
     return orig_posix_spawnp ? orig_posix_spawnp(pid, file, file_actions, attrp, argv, envp) : -1;
+}
+
+// --- B2: execve / execv / execvp (direct exec, bypassing posix_spawn) ---
+// Some probes fork()+exec*() directly instead of posix_spawn. We gate these
+// behind jbBypassHookExecEnabled (default OFF) and reuse PXJBSpawnPathLooksLikeProbe.
+// exec* are not variadic in these forms, so there is no ABI risk like fcntl/syscall.
+static int (*orig_execve)(const char *, char *const[], char *const[]);
+static int hook_execve(const char *path, char *const argv[], char *const envp[]) {
+    if (PXJBHookExecEnabled() && path && PXJBSpawnPathLooksLikeProbe(path)) {
+        PXJBLogBlockedOncePerSecond("execve", path);
+        errno = ENOENT;
+        return -1;
+    }
+    return orig_execve ? orig_execve(path, argv, envp) : -1;
+}
+
+static int (*orig_execv)(const char *, char *const[]);
+static int hook_execv(const char *path, char *const argv[]) {
+    if (PXJBHookExecEnabled() && path && PXJBSpawnPathLooksLikeProbe(path)) {
+        PXJBLogBlockedOncePerSecond("execv", path);
+        errno = ENOENT;
+        return -1;
+    }
+    return orig_execv ? orig_execv(path, argv) : -1;
+}
+
+static int (*orig_execvp)(const char *, char *const[]);
+static int hook_execvp(const char *file, char *const argv[]) {
+    if (PXJBHookExecEnabled() && file && PXJBSpawnPathLooksLikeProbe(file)) {
+        PXJBLogBlockedOncePerSecond("execvp", file);
+        errno = ENOENT;
+        return -1;
+    }
+    return orig_execvp ? orig_execvp(file, argv) : -1;
 }
 
 // Optional strong hook: sandbox_check
@@ -1407,6 +1593,30 @@ static int hook_proc_regionfilename(int pid, uint64_t address, void *buffer, uin
     if (PXJBShouldHideImageName(cbuf) || PXJBPathShouldHide(cbuf)) {
         cbuf[0] = '\0';
         return 0;
+    }
+    return r;
+}
+
+// --- B3: proc_pidpath / proc_pidinfo (libproc) ---
+// Detectors use these to read a process's executable path or info; the path
+// can leak jailbreak dylib/app locations. We only sanitize our own process
+// (pid == getpid()) and only when jbBypassHideProcInfoEnabled is set.
+// libproc.h may not ship in all Theos SDKs, so declare prototypes manually.
+extern int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
+static int (*orig_proc_pidpath)(int, void *, uint32_t);
+static int hook_proc_pidpath(int pid, void *buffer, uint32_t buffersize) {
+    if (!orig_proc_pidpath) return -1;
+    int r = orig_proc_pidpath(pid, buffer, buffersize);
+    if (r <= 0) return r;
+    if (!PXJBHideProcInfoEnabled()) return r;
+    if (pid != getpid()) return r;
+    if (!buffer || buffersize == 0) return r;
+    char *cbuf = (char *)buffer;
+    cbuf[buffersize - 1] = '\0';
+    if (PXJBShouldHideImageName(cbuf) || PXJBPathShouldHide(cbuf)) {
+        // Returning the real path would expose a JB location; report failure.
+        errno = ESRCH;
+        return -1;
     }
     return r;
 }
@@ -1953,9 +2163,15 @@ static int hook_creat(const char *path, mode_t mode) {
 }
 
 // --- Priority 3: fstat (fd-based, resolve via fcntl F_GETPATH) ---
+// RISK NOTE: fstat is an extremely hot path. Resolving fd->path via
+// fcntl(F_GETPATH) on EVERY call adds one syscall + a PATH_MAX (1KB) stack
+// buffer per invocation, even for fds unrelated to jailbreak detection.
+// Very few detectors use fstat to probe JB, so the path-resolve branch is
+// gated behind its own toggle (jbBypassHookFstatPathEnabled, default OFF).
+// When the toggle is off, this hook forwards with zero added cost.
 static int (*orig_fstat)(int, struct stat *);
 static int hook_fstat(int fd, struct stat *buf) {
-    if (PXJBShouldBypassCached() && fd >= 0) {
+    if (PXJBHookFstatPathEnabled() && fd >= 0) {
         char fdpath[PATH_MAX];
         if (fcntl(fd, F_GETPATH, fdpath) != -1) {
             if (PXJBPathShouldHide(fdpath)) {
@@ -1991,6 +2207,44 @@ static int hook_fstatat(int dirfd, const char *pathname, struct stat *buf, int f
         }
     }
     return orig_fstatat ? orig_fstatat(dirfd, pathname, buf, flags) : -1;
+}
+
+// --- B1: getattrlist / getattrlistat (path-based) ---
+// getattrlist/getattrlistat exposes file metadata; if not hidden here, a
+// detection routine can probe a path's attributes even when stat/access are
+// already covered. Gated behind the shared bypass toggle and reuses
+// PXJBPathShouldHide so the hide-list stays single-sourced.
+static int (*orig_getattrlist)(const char *, struct attrlist *, void *, size_t, unsigned long);
+static int hook_getattrlist(const char *path, struct attrlist *attrList, void *attrBuf, size_t attrBufSize, unsigned long options) {
+    if (PXJBShouldBypassCached() && path && PXJBPathShouldHide(path)) {
+        errno = ENOENT;
+        return -1;
+    }
+    return orig_getattrlist ? orig_getattrlist(path, attrList, attrBuf, attrBufSize, options) : -1;
+}
+
+static int (*orig_getattrlistat)(int, const char *, struct attrlist *, void *, size_t, unsigned long);
+static int hook_getattrlistat(int dirfd, const char *path, struct attrlist *attrList, void *attrBuf, size_t attrBufSize, unsigned long options) {
+    if (PXJBShouldBypassCached() && path) {
+        if (path[0] != '/' && dirfd != AT_FDCWD) {
+            char dirpath[PATH_MAX];
+            if (fcntl(dirfd, F_GETPATH, dirpath) != -1) {
+                NSString *base = [NSString stringWithUTF8String:dirpath];
+                NSString *rel = [NSString stringWithUTF8String:path];
+                NSString *full = [base stringByAppendingPathComponent:rel];
+                if (PXJBPathShouldHide([full fileSystemRepresentation])) {
+                    errno = ENOENT;
+                    return -1;
+                }
+            }
+        } else {
+            if (PXJBPathShouldHide(path)) {
+                errno = ENOENT;
+                return -1;
+            }
+        }
+    }
+    return orig_getattrlistat ? orig_getattrlistat(dirfd, path, attrList, attrBuf, attrBufSize, options) : -1;
 }
 
 // --- Priority 3: faccessat ---
@@ -2221,6 +2475,84 @@ static kern_return_t hook_task_get_exception_ports(task_t task, exception_mask_t
 
 // --- JailbreakDetector bypass: fcntl (F_ADDSIGS / F_GETSIGSINFO) ---
 // Block code signature injection probing and lie about platform binary status.
+// fcntl arg classification.
+// fcntl's third argument depends on cmd: some take no arg, some an int,
+// some a pointer. Reading the wrong type via va_arg and forwarding it is
+// ABI-unsafe. We classify known cmds and forward with the correct type.
+//
+// RISK NOTE: fcntl is an ABI-sensitive variadic hook. Any cmd not classified
+// here falls back to the pointer-arg path (matches the previous behavior).
+// On arm64 the third slot is passed in a register, so an over-read is
+// typically benign, but misclassification of an int-arg cmd as pointer is
+// still technically non-conforming. Keep this table in sync with <fcntl.h>.
+static BOOL PXJBFcntlIsNoArgCmd(int cmd) {
+    switch (cmd) {
+        case F_GETFD:
+        case F_GETFL:
+        case F_GETOWN:
+#ifdef F_GETLEASE
+        case F_GETLEASE:
+#endif
+#ifdef F_FULLFSYNC
+        case F_FULLFSYNC:
+#endif
+#ifdef F_FREEZE_FS
+        case F_FREEZE_FS:
+#endif
+#ifdef F_THAW_FS
+        case F_THAW_FS:
+#endif
+#ifdef F_FLUSH_DATA
+        case F_FLUSH_DATA:
+#endif
+#ifdef F_CHKCLEAN
+        case F_CHKCLEAN:
+#endif
+#ifdef F_NODIRECT
+        case F_NODIRECT:
+#endif
+            return YES;
+        default:
+            return NO;
+    }
+}
+
+static BOOL PXJBFcntlIsIntArgCmd(int cmd) {
+    switch (cmd) {
+        case F_DUPFD:
+#ifdef F_DUPFD_CLOEXEC
+        case F_DUPFD_CLOEXEC:
+#endif
+        case F_SETFD:
+        case F_SETFL:
+        case F_SETOWN:
+#ifdef F_RDAHEAD
+        case F_RDAHEAD:
+#endif
+#ifdef F_NOCACHE
+        case F_NOCACHE:
+#endif
+#ifdef F_GLOBAL_NOCACHE
+        case F_GLOBAL_NOCACHE:
+#endif
+#ifdef F_SETLEASE
+        case F_SETLEASE:
+#endif
+#ifdef F_SINGLE_WRITER
+        case F_SINGLE_WRITER:
+#endif
+#ifdef F_SETNOSIGPIPE
+        case F_SETNOSIGPIPE:
+#endif
+#ifdef F_GETNOSIGPIPE
+        case F_GETNOSIGPIPE:
+#endif
+            return YES;
+        default:
+            return NO;
+    }
+}
+
 static int (*orig_fcntl)(int, int, ...);
 static int hook_fcntl(int fd, int cmd, ...) {
     va_list ap;
@@ -2244,7 +2576,18 @@ static int hook_fcntl(int fd, int cmd, ...) {
         }
     }
 
-    // Forward all other fcntl commands
+    // Forward all other fcntl commands with the correctly-typed third arg.
+    if (PXJBFcntlIsNoArgCmd(cmd)) {
+        va_end(ap);
+        return orig_fcntl ? orig_fcntl(fd, cmd) : -1;
+    }
+    if (PXJBFcntlIsIntArgCmd(cmd)) {
+        int iarg = va_arg(ap, int);
+        va_end(ap);
+        return orig_fcntl ? orig_fcntl(fd, cmd, iarg) : -1;
+    }
+    // Default: pointer-arg cmds (F_GETPATH, F_PREALLOCATE, F_LOG2PHYS,
+    // F_SETLK/F_GETLK struct flock*, etc.) and any unclassified cmd.
     void *arg = va_arg(ap, void *);
     va_end(ap);
     return orig_fcntl ? orig_fcntl(fd, cmd, arg) : -1;

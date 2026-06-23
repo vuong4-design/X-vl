@@ -8,6 +8,9 @@
 #import <dispatch/dispatch.h>
 #import <fcntl.h>
 #import <unistd.h>
+#import <sys/sysctl.h>
+#import <sys/types.h>
+#import <sys/param.h>
 
 extern char **environ;
 
@@ -137,4 +140,83 @@ BOOL PXKillallTermThenKillMany(NSArray<NSString *> *processNames, NSTimeInterval
         any |= PXKillallByName((NSString *)n, SIGKILL);
     }
     return any;
+}
+
+BOOL PXProcessIsRunning(NSString *processName) {
+    if (![processName isKindOfClass:[NSString class]] || processName.length == 0) return NO;
+
+    const char *target = [processName UTF8String];
+    if (!target) return NO;
+
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0 };
+
+    // Query required buffer size first. The process table can change between
+    // the sizing call and the fetch, so retry a few times on ENOMEM.
+    for (int attempt = 0; attempt < 4; attempt++) {
+        size_t size = 0;
+        if (sysctl(mib, 4, NULL, &size, NULL, 0) != 0) {
+            return NO;
+        }
+        if (size == 0) {
+            return NO;
+        }
+
+        // Add headroom in case the table grew since sizing.
+        size_t allocSize = size + (size / 8) + sizeof(struct kinfo_proc);
+        struct kinfo_proc *procs = (struct kinfo_proc *)malloc(allocSize);
+        if (!procs) {
+            return NO;
+        }
+
+        size_t fetched = allocSize;
+        int rc = sysctl(mib, 4, procs, &fetched, NULL, 0);
+        if (rc != 0) {
+            free(procs);
+            if (errno == ENOMEM) {
+                // Table grew; retry with a fresh size.
+                continue;
+            }
+            return NO;
+        }
+
+        NSUInteger count = fetched / sizeof(struct kinfo_proc);
+        BOOL found = NO;
+        for (NSUInteger i = 0; i < count; i++) {
+            const char *comm = procs[i].kp_proc.p_comm;
+            // p_comm is truncated to MAXCOMLEN (16) chars including NUL, so
+            // compare against the same truncation of the target name.
+            if (strncmp(comm, target, MAXCOMLEN) == 0) {
+                found = YES;
+                break;
+            }
+        }
+        free(procs);
+        return found;
+    }
+
+    return NO;
+}
+
+BOOL PXWaitForProcessesToExit(NSArray<NSString *> *processNames, NSTimeInterval timeoutSeconds) {
+    if (![processNames isKindOfClass:[NSArray class]] || processNames.count == 0) return YES;
+    if (timeoutSeconds <= 0) timeoutSeconds = 0.5;
+
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:timeoutSeconds];
+    for (;;) {
+        BOOL anyAlive = NO;
+        for (id n in processNames) {
+            if (![n isKindOfClass:[NSString class]] || ![(NSString *)n length]) continue;
+            if (PXProcessIsRunning((NSString *)n)) {
+                anyAlive = YES;
+                break;
+            }
+        }
+        if (!anyAlive) {
+            return YES;
+        }
+        if ([[NSDate date] compare:deadline] != NSOrderedAscending) {
+            return NO;
+        }
+        usleep(50000); // 50ms between polls
+    }
 }
