@@ -2,6 +2,7 @@
 #import "UptimeManager.h"
 #import "ProfileManager.h"
 #import "ProjectXLogging.h"
+#import "HookOwnership.h"
 #import <Foundation/Foundation.h>
 #import <sys/sysctl.h>
 #import <sys/time.h>

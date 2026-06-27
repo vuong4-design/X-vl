@@ -1,0 +1,33 @@
+timestamp=2026-06-23T15:51:56.472Z level=INFO run=f8ad5235 message="creating instance" directory="C:\\Users\\ADMIN\\Documents\\GitHub\\X-vl\\ProjectXTweak"
+timestamp=2026-06-23T15:51:56.474Z level=INFO run=f8ad5235 message=fromDirectory directory="C:\\Users\\ADMIN\\Documents\\GitHub\\X-vl\\ProjectXTweak"
+timestamp=2026-06-23T15:51:56.711Z level=INFO run=f8ad5235 message=bootstrapping directory="C:\\Users\\ADMIN\\Documents\\GitHub\\X-vl\\ProjectXTweak"
+timestamp=2026-06-23T15:51:56.720Z level=INFO run=f8ad5235 message=loading path="C:\\Users\\ADMIN\\.config\\opencode\\config.json"
+timestamp=2026-06-23T15:51:56.726Z level=INFO run=f8ad5235 message=loading path="C:\\Users\\ADMIN\\.config\\opencode\\opencode.json"
+timestamp=2026-06-23T15:51:56.733Z level=INFO run=f8ad5235 message=loading path="C:\\Users\\ADMIN\\.config\\opencode\\opencode.jsonc"
+timestamp=2026-06-23T15:51:56.844Z level=INFO run=f8ad5235 message="all LSPs are disabled"
+timestamp=2026-06-23T15:51:56.846Z level=INFO run=f8ad5235 message="all formatters are disabled"
+timestamp=2026-06-23T15:51:56.846Z level=INFO run=f8ad5235 message=init
+timestamp=2026-06-23T15:51:57.138Z level=INFO run=f8ad5235 message=created id=ses_10ad1a22dffeE6eZa6ki5k3J2S slug=gentle-river version=1.17.9 projectID=8abaa72ba614b15619ea7db5294b418d0a422b9f directory="C:\\Users\\ADMIN\\Documents\\GitHub\\X-vl\\ProjectXTweak" path=ProjectXTweak workspaceID=undefined parentID=undefined title="New session - 2026-06-23T15:51:57.138Z" agent=undefined model=undefined metadata=undefined permission="[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]" cost=0 tokens.input=0 tokens.output=0 tokens.reasoning=0 tokens.cache.read=0 tokens.cache.write=0 time.created=1782229917138 time.updated=1782229917138
+timestamp=2026-06-23T15:51:57.171Z level=INFO run=f8ad5235 message="event connected"
+timestamp=2026-06-23T15:51:57.285Z level=INFO run=f8ad5235 message="booting location services" directory="C:\\Users\\ADMIN\\Documents\\GitHub\\X-vl\\ProjectXTweak" workspaceID=undefined
+timestamp=2026-06-23T15:51:57.690Z level=INFO run=f8ad5235 message="watcher backend" directory="C:\\Users\\ADMIN\\Documents\\GitHub\\X-vl\\ProjectXTweak" platform=win32 backend=windows
+timestamp=2026-06-23T15:51:58.778Z level=INFO run=f8ad5235 message="project copy refresh started" projectID=8abaa72ba614b15619ea7db5294b418d0a422b9f
+timestamp=2026-06-23T15:51:58.880Z level=INFO run=f8ad5235 message=loop session.id=ses_10ad1a22dffeE6eZa6ki5k3J2S step=0
+[0m
+> build · claude-opus-4-8
+[0m
+timestamp=2026-06-23T15:51:58.916Z level=INFO run=f8ad5235 message=stream providerID=myapi modelID=claude-opus-4-8 session.id=ses_10ad1a22dffeE6eZa6ki5k3J2S small=true agent=title mode=primary
+timestamp=2026-06-23T15:51:58.950Z level=INFO run=f8ad5235 message="llm runtime selected" llm.runtime=ai-sdk llm.provider=myapi llm.model=claude-opus-4-8
+timestamp=2026-06-23T15:51:59.073Z level=INFO run=f8ad5235 message="project copy refresh done" projectID=8abaa72ba614b15619ea7db5294b418d0a422b9f updated=[] removed=[]
+timestamp=2026-06-23T15:51:59.416Z level=INFO run=f8ad5235 message=tracking hash=bff68a767caec19bb0f2609e48c9ff03bf16a46b cwd="C:\\Users\\ADMIN\\Documents\\GitHub\\X-vl\\ProjectXTweak" git="C:\\Users\\ADMIN\\.local\\share\\opencode\\snapshot\\8abaa72ba614b15619ea7db5294b418d0a422b9f\\8bdab6888d006fd72ed5764ea1a269639b431212"
+timestamp=2026-06-23T15:51:59.446Z level=INFO run=f8ad5235 message="shell tool using shell" shell="C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.EXE"
+timestamp=2026-06-23T15:51:59.456Z level=INFO run=f8ad5235 message=init count=1
+timestamp=2026-06-23T15:51:59.503Z level=INFO run=f8ad5235 message=process session.id=ses_10ad1a22dffeE6eZa6ki5k3J2S messageID=msg_ef52e64a4001AGjd3iU4cCbb22
+timestamp=2026-06-23T15:51:59.504Z level=INFO run=f8ad5235 message=stream providerID=myapi modelID=claude-opus-4-8 session.id=ses_10ad1a22dffeE6eZa6ki5k3J2S small=false agent=build mode=primary
+timestamp=2026-06-23T15:51:59.506Z level=INFO run=f8ad5235 message="llm runtime selected" llm.runtime=ai-sdk llm.provider=myapi llm.model=claude-opus-4-8
+timestamp=2026-06-23T15:52:00.036Z level=WARN run=f8ad5235 message="failed to add snapshot files" exitCode=128 stderr="warning: could not open directory 'ProjectXTweak/ProjectXTweak/': No such file or directory\nfatal: pathspec 'ProjectXTweak/out.txt' did not match any files\n"
+timestamp=2026-06-23T15:52:00.120Z level=INFO run=f8ad5235 message=tracking hash=bff68a767caec19bb0f2609e48c9ff03bf16a46b cwd="C:\\Users\\ADMIN\\Documents\\GitHub\\X-vl\\ProjectXTweak" git="C:\\Users\\ADMIN\\.local\\share\\opencode\\snapshot\\8abaa72ba614b15619ea7db5294b418d0a422b9f\\8bdab6888d006fd72ed5764ea1a269639b431212"
+timestamp=2026-06-23T15:52:00.499Z level=WARN run=f8ad5235 message="failed to add snapshot files" exitCode=128 stderr="warning: could not open directory 'ProjectXTweak/ProjectXTweak/': No such file or directory\nfatal: pathspec 'ProjectXTweak/out.txt' did not match any files\n"
+timestamp=2026-06-23T15:52:00.578Z level=INFO run=f8ad5235 message=loop session.id=ses_10ad1a22dffeE6eZa6ki5k3J2S step=1
+timestamp=2026-06-23T15:52:00.579Z level=INFO run=f8ad5235 message="exiting loop" session.id=ses_10ad1a22dffeE6eZa6ki5k3J2S
+timestamp=2026-06-23T15:52:00.594Z level=INFO run=f8ad5235 message="disposing instance" directory="C:\\Users\\ADMIN\\Documents\\GitHub\\X-vl\\ProjectXTweak"

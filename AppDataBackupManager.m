@@ -433,7 +433,11 @@ static NSString *PXCleanSubdirName(NSString *s) {
 - (CommandResult *)_tarExtract:(NSString *)tarPath archive:(NSString *)archivePath toDir:(NSString *)destDir {
     CommandRunner *runner = [CommandRunner shared];
 
-    NSString *cmd = [NSString stringWithFormat:@"%@ --xattrs --acls -xzf %@ -C %@",
+    // Always pass --overwrite. The caller may have failed to fully wipe the
+    // destination (A1 warning-only paths for app groups / profile appdata /
+    // global Safari), and iOS /usr/bin/tar refuses to overwrite by default,
+    // erroring out with "File exists". gtar/bsdtar accept --overwrite as well.
+    NSString *cmd = [NSString stringWithFormat:@"%@ --xattrs --acls --overwrite -xzf %@ -C %@",
                      PXShellQuote(tarPath),
                      PXShellQuote(archivePath),
                      PXShellQuote(destDir)];
@@ -442,11 +446,24 @@ static NSString *PXCleanSubdirName(NSString *s) {
         return res;
     }
 
-    NSString *fallback = [NSString stringWithFormat:@"%@ -xzf %@ -C %@",
+    // Fallback without xattrs/acls (some tar builds lack support), still overwrite.
+    NSString *fallback = [NSString stringWithFormat:@"%@ --overwrite -xzf %@ -C %@",
                           PXShellQuote(tarPath),
                           PXShellQuote(archivePath),
                           PXShellQuote(destDir)];
-    return [runner runAndCapture:fallback];
+    res = [runner runAndCapture:fallback];
+    if (res.exitCode == 0) {
+        return res;
+    }
+
+    // Last resort: a minimal tar build that doesn't recognise --overwrite.
+    // Without it, existing files will still cause errors, but try once so we
+    // don't fail solely because of an unknown flag.
+    NSString *bare = [NSString stringWithFormat:@"%@ -xzf %@ -C %@",
+                      PXShellQuote(tarPath),
+                      PXShellQuote(archivePath),
+                      PXShellQuote(destDir)];
+    return [runner runAndCapture:bare];
 }
 
 - (NSString *)_preferencesDirectory {

@@ -3882,6 +3882,27 @@ static BOOL PXJBIsJBPlistSuiteName(NSString *suiteName) {
             sym = FindSymbol(NULL, "posix_spawnp");
             if (sym) MSHookFunction(sym, (void *)hook_posix_spawnp, (void **)&orig_posix_spawnp);
 
+            // B2: execve/execv/execvp (gated at runtime by jbBypassHookExecEnabled).
+            sym = FindSymbol(NULL, "execve");
+            if (sym) MSHookFunction(sym, (void *)hook_execve, (void **)&orig_execve);
+
+            sym = FindSymbol(NULL, "execv");
+            if (sym) MSHookFunction(sym, (void *)hook_execv, (void **)&orig_execv);
+
+            sym = FindSymbol(NULL, "execvp");
+            if (sym) MSHookFunction(sym, (void *)hook_execvp, (void **)&orig_execvp);
+
+            // B1: getattrlist/getattrlistat (gated at runtime by jbBypassHookGetattrlistEnabled).
+            sym = FindSymbol(NULL, "getattrlist");
+            if (sym) MSHookFunction(sym, (void *)hook_getattrlist, (void **)&orig_getattrlist);
+
+            sym = FindSymbol(NULL, "getattrlistat");
+            if (sym) MSHookFunction(sym, (void *)hook_getattrlistat, (void **)&orig_getattrlistat);
+
+            // B3: proc_pidpath (gated at runtime by jbBypassHideProcInfoEnabled).
+            sym = FindSymbol(NULL, "proc_pidpath");
+            if (sym) MSHookFunction(sym, (void *)hook_proc_pidpath, (void **)&orig_proc_pidpath);
+
             // Optional: sandbox_check hook (default OFF)
             if (wantSandboxCheck) {
                 sym = FindSymbol(NULL, "sandbox_check");
