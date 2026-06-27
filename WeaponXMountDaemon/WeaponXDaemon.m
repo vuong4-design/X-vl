@@ -5,6 +5,7 @@
 #import <fcntl.h>
 #import <unistd.h>
 #import <os/log.h>
+#import "PXRoot.h"
 
 // Constants
 static const int kCheckInterval = 5; // Check every 5 seconds
@@ -39,13 +40,13 @@ extern int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
 - (instancetype)init {
     self = [super init];
     if (self) {
-        // Rootful jailbreak - no prefix needed
-        ROOT_PREFIX = @"";
-        NSLog(@"Rootful jailbreak mode");
+        // Resolve jbroot for the current environment (rootful/rootless/roothide).
+        ROOT_PREFIX = PXJBRoot();
+        NSLog(@"Resolved jbroot prefix: '%@'", ROOT_PREFIX);
         
-        // Set paths directly for rootful
-        kGuardianDir = @"/Library/WeaponX/Guardian";
-        kProjectXPath = @"/Applications/ProjectX.app/ProjectX";
+        // Route install/runtime paths through the jbroot resolver.
+        kGuardianDir = PXJBPath(@"/Library/WeaponX/Guardian");
+        kProjectXPath = PXJBPath(@"/Applications/ProjectX.app/ProjectX");
         
         _processInfo = [NSMutableDictionary dictionary];
         _protectedProcesses = [NSMutableArray arrayWithObjects:@"ProjectX", nil];

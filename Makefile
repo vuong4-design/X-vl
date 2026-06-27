@@ -30,8 +30,8 @@ ProjectX_CODESIGN_FLAGS = -Sent.plist
 ProjectX_CFLAGS = -fobjc-arc -D SUPPORT_IPAD=1 -D ENABLE_STATE_RESTORATION=1 -I./common
 
 # Daemon files
-WeaponXDaemon_FILES = WeaponXMountDaemon/WeaponXDaemon.m
-WeaponXDaemon_CFLAGS = -fobjc-arc
+WeaponXDaemon_FILES = WeaponXMountDaemon/WeaponXDaemon.m common/PXRoot.m
+WeaponXDaemon_CFLAGS = -fobjc-arc -I./common
 WeaponXDaemon_FRAMEWORKS = Foundation IOKit
 WeaponXDaemon_INSTALL_PATH = /Library/WeaponX
 WeaponXDaemon_CODESIGN_FLAGS = -Sent.plist

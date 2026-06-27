@@ -4,6 +4,7 @@
 #import <spawn.h>
 #import <sys/sysctl.h>
 #import <objc/runtime.h>
+#import "PXRoot.h"
 
 // Forward declarations for private API
 extern int proc_listpids(uint32_t type, uint32_t typeinfo, void *buffer, int buffersize);
@@ -19,8 +20,26 @@ extern int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
 
 static NSString * const kWeaponXGuardianKey = @"WeaponXGuardianActive";
 static NSString * const kWeaponXProcessIDs = @"WeaponXProcessIDs";
-static NSString * const kWeaponXDaemonPath = @"/Library/WeaponX/WeaponXDaemon";
-static NSString * const kWeaponXLaunchDaemonPath = @"/Library/LaunchDaemons/com.hydra.weaponx.guardian.plist";
+
+// Jbroot-resolved paths (rootful/rootless/roothide). Resolved lazily because
+// PXJBPath() is not a compile-time constant.
+static NSString *WeaponXDaemonPath(void) {
+    static NSString *path = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        path = PXJBPath(@"/Library/WeaponX/WeaponXDaemon");
+    });
+    return path;
+}
+
+static NSString *WeaponXLaunchDaemonPath(void) {
+    static NSString *path = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        path = PXJBPath(@"/Library/LaunchDaemons/com.hydra.weaponx.guardian.plist");
+    });
+    return path;
+}
 
 @interface WeaponXGuardian : NSObject
 @property (nonatomic, strong) NSTimer *guardianTimer;
@@ -86,14 +105,14 @@ static NSString * const kWeaponXLaunchDaemonPath = @"/Library/LaunchDaemons/com.
 - (void)ensureDaemonIsRunning {
     // Check if daemon exists
     NSFileManager *fileManager = [NSFileManager defaultManager];
-    if (![fileManager fileExistsAtPath:kWeaponXDaemonPath]) {
-        NSLog(@"[WeaponX] ⚠️ Daemon executable not found at %@", kWeaponXDaemonPath);
+    if (![fileManager fileExistsAtPath:WeaponXDaemonPath()]) {
+        NSLog(@"[WeaponX] ⚠️ Daemon executable not found at %@", WeaponXDaemonPath());
         return;
     }
     
     // Check if LaunchDaemon plist exists
-    if (![fileManager fileExistsAtPath:kWeaponXLaunchDaemonPath]) {
-        NSLog(@"[WeaponX] ⚠️ LaunchDaemon plist not found at %@", kWeaponXLaunchDaemonPath);
+    if (![fileManager fileExistsAtPath:WeaponXLaunchDaemonPath()]) {
+        NSLog(@"[WeaponX] ⚠️ LaunchDaemon plist not found at %@", WeaponXLaunchDaemonPath());
         return;
     }
     
@@ -103,7 +122,7 @@ static NSString * const kWeaponXLaunchDaemonPath = @"/Library/LaunchDaemons/com.
     const char *args[] = {
         launchctl,
         "load",
-        [kWeaponXLaunchDaemonPath UTF8String],
+        [WeaponXLaunchDaemonPath() UTF8String],
         NULL
     };
     
@@ -354,10 +373,10 @@ static NSString * const kWeaponXLaunchDaemonPath = @"/Library/LaunchDaemons/com.
     
     if ([processName isEqualToString:@"ProjectX"]) {
         // Path to the ProjectX app
-        processPath = @"/Applications/ProjectX.app/ProjectX";
+        processPath = PXJBPath(@"/Applications/ProjectX.app/ProjectX");
     } else if ([processName isEqualToString:@"WeaponXDaemon"]) {
         // Path to the daemon
-        processPath = @"/Library/WeaponX/WeaponXDaemon";
+        processPath = WeaponXDaemonPath();
     }
     
     if (!processPath) {
@@ -430,7 +449,7 @@ static NSString * const kWeaponXLaunchDaemonPath = @"/Library/LaunchDaemons/com.
 
 - (void)createPersistentState {
     // Create a directory to store our persistent state
-    NSString *guardianDir = @"/Library/WeaponX/Guardian";
+    NSString *guardianDir = PXJBPath(@"/Library/WeaponX/Guardian");
     NSFileManager *fileManager = [NSFileManager defaultManager];
     
     if (![fileManager fileExistsAtPath:guardianDir]) {
@@ -454,7 +473,7 @@ static NSString * const kWeaponXLaunchDaemonPath = @"/Library/LaunchDaemons/com.
 }
 
 - (void)updatePersistentState {
-    NSString *statePath = @"/Library/WeaponX/Guardian/guardian.plist";
+    NSString *statePath = PXJBPath(@"/Library/WeaponX/Guardian/guardian.plist");
     NSDictionary *state = @{
         @"active": @(_isGuardianActive),
         @"protectedProcesses": self.protectedProcesses,
@@ -482,7 +501,7 @@ static NSString * const kWeaponXLaunchDaemonPath = @"/Library/LaunchDaemons/com.
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
     // Update state with termination flag
-    NSString *statePath = @"/Library/WeaponX/Guardian/guardian.plist";
+    NSString *statePath = PXJBPath(@"/Library/WeaponX/Guardian/guardian.plist");
     NSDictionary *state = @{
         @"active": @(YES),
         @"needsRestart": @(YES),
