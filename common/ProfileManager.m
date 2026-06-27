@@ -1,6 +1,7 @@
 #import "ProfileManager.h"
 #import <UIKit/UIKit.h>
 #import "ContainerManager.h"
+#import "PXRoot.h"
 #import <spawn.h>
 #import <sys/wait.h>
 
@@ -186,12 +187,12 @@
         _fileManager = [NSFileManager defaultManager];
         
         // Use the specified jailbreak directory structure
-        _profilesDirectory = @"/var/mobile/Library/WeaponX/Profiles";
+        _profilesDirectory = PXRootPath(@"/var/mobile/Library/WeaponX/Profiles");
         
         NSLog(@"[WeaponX] 📁 Using profiles directory: %@", _profilesDirectory);
         
         // Create main WeaponX directory if it doesn't exist
-        NSString *weaponXDirectory = @"/var/mobile/Library/WeaponX";
+        NSString *weaponXDirectory = PXRootPath(@"/var/mobile/Library/WeaponX");
         [self createDirectoryIfNeeded:weaponXDirectory];
         
         // Create profiles directory if it doesn't exist
@@ -223,7 +224,7 @@
             [_fileManager setAttributes:@{NSFilePosixPermissions: @0644} ofItemAtPath:centralInfoPath error:nil];
             
             // Also write to active_profile_info.plist as a backup/legacy support
-            NSString *activeInfoPath = @"/var/mobile/Library/WeaponX/active_profile_info.plist";
+            NSString *activeInfoPath = PXRootPath(@"/var/mobile/Library/WeaponX/active_profile_info.plist");
             [profileInfo writeToFile:activeInfoPath atomically:YES];
             [_fileManager setAttributes:@{NSFilePosixPermissions: @0644} ofItemAtPath:activeInfoPath error:nil];
             
@@ -447,7 +448,7 @@
         NSInteger connectionType = [securitySettings integerForKey:@"networkConnectionType"];
         
         // Path to profile identity directory
-        NSString *identityDir = [NSString stringWithFormat:@"/var/mobile/Library/WeaponX/Profiles/%@/identity", profile.profileId];
+        NSString *identityDir = PXRootPath([NSString stringWithFormat:@"/var/mobile/Library/WeaponX/Profiles/%@/identity", profile.profileId]);
         
         // Check if directory exists, create if not
         NSFileManager *fileManager = [NSFileManager defaultManager];
@@ -890,7 +891,7 @@
     NSDictionary *scopedAppsInfo = [self loadScopedAppsInfo];
     
     // Create app_versions directory in the profile directory
-    NSString *profileDir = [NSString stringWithFormat:@"/var/mobile/Library/WeaponX/Profiles/%@", profileId];
+    NSString *profileDir = PXRootPath([NSString stringWithFormat:@"/var/mobile/Library/WeaponX/Profiles/%@", profileId]);
     NSString *appVersionsDir = [profileDir stringByAppendingPathComponent:@"app_versions"];
     
     if (![self.fileManager fileExistsAtPath:appVersionsDir]) {
@@ -1085,7 +1086,7 @@
         NSMutableArray *existingIDs = [NSMutableArray array];
         
         // Get profiles directory path
-        NSString *profilesDirectory = @"/var/mobile/Library/WeaponX/Profiles";
+        NSString *profilesDirectory = PXRootPath(@"/var/mobile/Library/WeaponX/Profiles");
         
         // Get file manager
         NSFileManager *fileManager = [NSFileManager defaultManager];
@@ -1299,7 +1300,7 @@
 }
 
 - (void)saveSettings:(NSDictionary *)settings {
-    NSString *settingsPath = [@"/var/mobile/Library/WeaponX" stringByAppendingPathComponent:@"settings.plist"];
+    NSString *settingsPath = [PXRootPath(@"/var/mobile/Library/WeaponX") stringByAppendingPathComponent:@"settings.plist"];
     
     BOOL success = [settings writeToFile:settingsPath atomically:YES];
     if (success) {
@@ -1527,7 +1528,7 @@
     [self updateCurrentProfileInfoWithProfile:defaultProfile];
     
     // Also write directly to active_profile_info.plist as a backup
-    NSString *activeInfoPath = @"/var/mobile/Library/WeaponX/active_profile_info.plist";
+    NSString *activeInfoPath = PXRootPath(@"/var/mobile/Library/WeaponX/active_profile_info.plist");
     NSDictionary *activeInfo = @{
         @"ProfileId": @"0",
         @"ProfileName": defaultProfile.name,

@@ -1,4 +1,5 @@
 #import "IdentifierManager.h"
+#import "PXRoot.h"
 #import "DeviceModelManager.h"
 #import "IDFAManager.h"
 #import "IDFVManager.h"
@@ -484,13 +485,13 @@ static NSString *PXPickModelNumberFromModelSpec(NSDictionary *modelSpec) {
 
 - (NSString *)getActiveProfileId {
     // First check the primary profile info file
-    NSString *centralInfoPath = @"/var/mobile/Library/WeaponX/Profiles/current_profile_info.plist";
+    NSString *centralInfoPath = PXRootPath(@"/var/mobile/Library/WeaponX/Profiles/current_profile_info.plist");
     NSDictionary *centralInfo = [NSDictionary dictionaryWithContentsOfFile:centralInfoPath];
     
     NSString *profileId = centralInfo[@"ProfileId"];
     if (!profileId) {
         // If not found, check the legacy active_profile_info.plist
-        NSString *activeInfoPath = @"/var/mobile/Library/WeaponX/active_profile_info.plist";
+        NSString *activeInfoPath = PXRootPath(@"/var/mobile/Library/WeaponX/active_profile_info.plist");
         NSDictionary *activeInfo = [NSDictionary dictionaryWithContentsOfFile:activeInfoPath];
         profileId = activeInfo[@"ProfileId"];
         
@@ -501,7 +502,7 @@ static NSString *PXPickModelNumberFromModelSpec(NSDictionary *modelSpec) {
         NSLog(@"[WeaponX] Warning: No active profile ID found, using default");
         // Try to find any profile directory as a fallback
         NSFileManager *fileManager = [NSFileManager defaultManager];
-        NSString *profilesDir = @"/var/mobile/Library/WeaponX/Profiles";
+        NSString *profilesDir = PXRootPath(@"/var/mobile/Library/WeaponX/Profiles");
         NSError *error = nil;
         NSArray *contents = [fileManager contentsOfDirectoryAtPath:profilesDir error:&error];
         
@@ -539,7 +540,7 @@ static NSString *PXPickModelNumberFromModelSpec(NSDictionary *modelSpec) {
     }
     
     // Build the path to this profile's identity directory
-    NSString *profileDir = [NSString stringWithFormat:@"/var/mobile/Library/WeaponX/Profiles/%@", profileId];
+    NSString *profileDir = PXRootPath([NSString stringWithFormat:@"/var/mobile/Library/WeaponX/Profiles/%@", profileId]);
     NSString *identityDir = [profileDir stringByAppendingPathComponent:@"identity"];
     
     // Create the directory if it doesn't exist

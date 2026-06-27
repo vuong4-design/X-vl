@@ -1,5 +1,6 @@
 #import "StorageManager.h"
 #import "ProfileManager.h"
+#import "PXRoot.h"
 #import "ProjectXLogging.h"
 
 // Constants for proper size calculations
@@ -44,7 +45,7 @@
 
 - (void)loadFromCurrentProfile {
     // Get active profile ID
-    NSString *profilesPath = @"/var/mobile/Library/WeaponX/Profiles/current_profile_info.plist";
+    NSString *profilesPath = PXRootPath(@"/var/mobile/Library/WeaponX/Profiles/current_profile_info.plist");
     NSDictionary *currentProfileInfo = [NSDictionary dictionaryWithContentsOfFile:profilesPath];
     
     if (currentProfileInfo && currentProfileInfo[@"ProfileId"]) {
@@ -259,7 +260,7 @@
 - (BOOL)loadFromProfile:(NSString *)profileId {
     if (!profileId) return NO;
     
-    NSString *profileDir = [NSString stringWithFormat:@"/var/mobile/Library/WeaponX/Profiles/%@", profileId];
+    NSString *profileDir = PXRootPath([NSString stringWithFormat:@"/var/mobile/Library/WeaponX/Profiles/%@", profileId]);
     NSString *storagePath = [profileDir stringByAppendingPathComponent:@"storage.plist"];
     
     NSDictionary *savedSettings = [NSDictionary dictionaryWithContentsOfFile:storagePath];

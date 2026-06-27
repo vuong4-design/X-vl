@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Required for TrollStore to spawn this helper as root via persona-mgmt. -->
+	<key>com.apple.private.persona-mgmt</key>
+	<true/>
+	<!-- Marks the binary as a platform binary so AMFI accepts it. -->
+	<key>platform-application</key>
+	<true/>
+	<!-- Run outside the app sandbox so the helper can touch system-scoped paths. -->
+	<key>com.apple.private.security.no-sandbox</key>
+	<true/>
+</dict>
+</plist>
