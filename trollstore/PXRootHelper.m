@@ -120,10 +120,7 @@ static NSString *const kPXRootHelperBinaryName = @"weaponx_root_helper";
 
     NSString *outStr = nil;
     NSString *errStr = nil;
-    int code = [TSUtil spawnRoot:helperPath
-                            args:argv
-                          stdOut:&outStr
-                          stdErr:&errStr];
+    int code = spawnRoot(helperPath, argv, &outStr, &errStr);
 
     if (stdOut) {
         *stdOut = outStr;
