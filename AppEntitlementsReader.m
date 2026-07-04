@@ -9,7 +9,7 @@
 
 #import <objc/message.h>
 
-static NSString * const PXEntitlementsErrorDomain = @"com.hydra.projectx.entitlements";
+static NSString * const AppEntitlementsReaderErrorDomain = @"com.hydra.projectx.entitlements.reader";
 
 @implementation AppEntitlementsReader
 
@@ -32,7 +32,7 @@ static NSString *PXShellQuote(NSString *s) {
     NSDictionary *ents = [PXEntitlements entitlementsForBinaryAtPath:binaryPath error:&entErr];
     if (!ents) {
         if (error) {
-            *error = entErr ?: [NSError errorWithDomain:PXEntitlementsErrorDomain
+            *error = entErr ?: [NSError errorWithDomain:AppEntitlementsReaderErrorDomain
                                                    code:2
                                                userInfo:@{NSLocalizedDescriptionKey: @"Failed to read entitlements"}];
         }
@@ -51,7 +51,7 @@ static NSString *PXShellQuote(NSString *s) {
 
     if (!ldidPath) {
         if (error) {
-            *error = [NSError errorWithDomain:PXEntitlementsErrorDomain
+            *error = [NSError errorWithDomain:AppEntitlementsReaderErrorDomain
                                          code:1
                                      userInfo:@{NSLocalizedDescriptionKey: @"ldid not found"}];
         }
@@ -63,7 +63,7 @@ static NSString *PXShellQuote(NSString *s) {
     if (res.exitCode != 0) {
         if (error) {
             NSString *msg = res.stderrString.length ? res.stderrString : @"ldid failed";
-            *error = [NSError errorWithDomain:PXEntitlementsErrorDomain
+            *error = [NSError errorWithDomain:AppEntitlementsReaderErrorDomain
                                          code:2
                                      userInfo:@{NSLocalizedDescriptionKey: msg}];
         }
@@ -73,7 +73,7 @@ static NSString *PXShellQuote(NSString *s) {
     NSData *plistData = [res.stdoutString dataUsingEncoding:NSUTF8StringEncoding];
     if (!plistData.length) {
         if (error) {
-            *error = [NSError errorWithDomain:PXEntitlementsErrorDomain
+            *error = [NSError errorWithDomain:AppEntitlementsReaderErrorDomain
                                          code:3
                                      userInfo:@{NSLocalizedDescriptionKey: @"Empty entitlements output"}];
         }
@@ -88,7 +88,7 @@ static NSString *PXShellQuote(NSString *s) {
                                                          error:&plistError];
     if (!obj || ![obj isKindOfClass:[NSDictionary class]]) {
         if (error) {
-            *error = plistError ?: [NSError errorWithDomain:PXEntitlementsErrorDomain
+            *error = plistError ?: [NSError errorWithDomain:AppEntitlementsReaderErrorDomain
                                                        code:4
                                                    userInfo:@{NSLocalizedDescriptionKey: @"Failed to parse entitlements plist"}];
         }
@@ -221,7 +221,7 @@ static NSString *PXShellQuote(NSString *s) {
     NSString *bundleUUID = [cleaner findBundleContainerUUIDForBundleID:bundleID];
     if (!bundleUUID.length) {
         if (error) {
-            *error = [NSError errorWithDomain:PXEntitlementsErrorDomain
+            *error = [NSError errorWithDomain:AppEntitlementsReaderErrorDomain
                                          code:10
                                      userInfo:@{NSLocalizedDescriptionKey: @"Bundle container UUID not found"}];
         }
@@ -265,7 +265,7 @@ static NSString *PXShellQuote(NSString *s) {
             NSString *exe = info[@"CFBundleExecutable"];
             if (![exe isKindOfClass:[NSString class]] || !exe.length) {
                 if (error) {
-                    *error = [NSError errorWithDomain:PXEntitlementsErrorDomain
+                    *error = [NSError errorWithDomain:AppEntitlementsReaderErrorDomain
                                                  code:11
                                              userInfo:@{NSLocalizedDescriptionKey: @"CFBundleExecutable missing"}];
                 }
@@ -279,7 +279,7 @@ static NSString *PXShellQuote(NSString *s) {
     }
 
     if (error) {
-        *error = [NSError errorWithDomain:PXEntitlementsErrorDomain
+        *error = [NSError errorWithDomain:AppEntitlementsReaderErrorDomain
                                      code:12
                                  userInfo:@{NSLocalizedDescriptionKey: @"Main executable not found in bundle container"}];
     }
