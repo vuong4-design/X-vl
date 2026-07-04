@@ -7,6 +7,7 @@
 //
 // Usage (argv):
 //   weaponx_root_helper rm      <absolute-path>
+//   weaponx_root_helper rmglob  <absolute-dir> <fnmatch-pattern>
 //   weaponx_root_helper chown   <uid> <gid> <absolute-path>          (recursive)
 //   weaponx_root_helper chmod   <octal-mode> <absolute-path> [-R]
 //   weaponx_root_helper chflags clear <absolute-path> [-R]
@@ -30,6 +31,7 @@
 #import <string.h>
 #import <stdlib.h>
 #import <errno.h>
+#import <fnmatch.h>
 
 // Allowlisted path prefixes. Keep narrow; each new prefix needs justification.
 static const char *kAllowedPrefixes[] = {
@@ -108,6 +110,31 @@ static int op_rm(NSString *path) {
         return 3;
     }
     return 0;
+}
+
+static int op_rmglob(NSString *dir, NSString *pattern) {
+    NSString *dirForAllow = [dir hasSuffix:@"/"] ? dir : [dir stringByAppendingString:@"/"];
+    if (!pathIsAllowed(dirForAllow)) { perr(@"rmglob: dir not allowed: %@", dir); return 2; }
+    if (pattern.length == 0 || [pattern containsString:@"/"]) { perr(@"rmglob: invalid pattern: %@", pattern); return 2; }
+
+    DIR *d = opendir(dir.fileSystemRepresentation);
+    if (!d) {
+        if (errno == ENOENT) return 0;
+        perr(@"rmglob opendir '%@' failed: %s", dir, strerror(errno));
+        return 3;
+    }
+
+    struct dirent *e;
+    int rc = 0;
+    while ((e = readdir(d)) != NULL) {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+        if (fnmatch(pattern.fileSystemRepresentation, e->d_name, FNM_PERIOD) != 0) continue;
+        NSString *child = [dir stringByAppendingPathComponent:@(e->d_name)];
+        rc = op_rm(child);
+        if (rc != 0) break;
+    }
+    closedir(d);
+    return rc;
 }
 
 static int chown_recursive(NSString *path, uid_t uid, gid_t gid) {
@@ -228,6 +255,10 @@ int main(int argc, char *argv[]) {
         if ([op isEqualToString:@"rm"]) {
             if (argc != 3) { perr(@"rm: expects <path>"); return 2; }
             return op_rm(@(argv[2]));
+        }
+        if ([op isEqualToString:@"rmglob"]) {
+            if (argc != 4) { perr(@"rmglob: expects <dir> <pattern>"); return 2; }
+            return op_rmglob(@(argv[2]), @(argv[3]));
         }
         if ([op isEqualToString:@"chown"]) {
             if (argc != 5) { perr(@"chown: expects <uid> <gid> <path>"); return 2; }

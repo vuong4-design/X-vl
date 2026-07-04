@@ -5,7 +5,6 @@ NS_ASSUME_NONNULL_BEGIN
 @interface AppEntitlementsReader : NSObject
 
 // Returns application group identifiers from the target app's entitlements.
-// Uses ldid -e on the main executable.
 - (NSArray<NSString *> *)applicationGroupsForBundleID:(NSString *)bundleID
                                                 error:(NSError **)error;
 

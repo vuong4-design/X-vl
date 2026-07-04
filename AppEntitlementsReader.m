@@ -1,7 +1,11 @@
 #import "AppEntitlementsReader.h"
 
 #import "AppDataCleaner.h"
+#ifdef PROJECTX_TROLLSTORE
+#import "PXEntitlements.h"
+#else
 #import "CommandRunner.h"
+#endif
 
 #import <objc/message.h>
 
@@ -9,11 +13,12 @@ static NSString * const PXEntitlementsErrorDomain = @"com.hydra.projectx.entitle
 
 @implementation AppEntitlementsReader
 
+#ifndef PROJECTX_TROLLSTORE
 static NSString *PXShellQuote(NSString *s) {
-    // Single-quote for /bin/sh; escape internal single quotes.
-    NSString *escaped = [s stringByReplacingOccurrencesOfString:@"'" withString:@"'\\''"]; // close, escape, reopen
+    NSString *escaped = [s stringByReplacingOccurrencesOfString:@"'" withString:@"'\\''"];
     return [NSString stringWithFormat:@"'%@'", escaped];
 }
+#endif
 
 - (NSDictionary *)fullEntitlementsForBundleID:(NSString *)bundleID
                                         error:(NSError **)error {
@@ -22,6 +27,20 @@ static NSString *PXShellQuote(NSString *s) {
         return nil;
     }
 
+#ifdef PROJECTX_TROLLSTORE
+    NSError *entErr = nil;
+    NSDictionary *ents = [PXEntitlements entitlementsForBinaryAtPath:binaryPath error:&entErr];
+    if (!ents) {
+        if (error) {
+            *error = entErr ?: [NSError errorWithDomain:PXEntitlementsErrorDomain
+                                                   code:2
+                                               userInfo:@{NSLocalizedDescriptionKey: @"Failed to read entitlements"}];
+        }
+        return nil;
+    }
+
+    return ents;
+#else
     CommandRunner *runner = [CommandRunner shared];
     NSString *ldidPath = [runner firstExistingPath:@[
         @"/usr/bin/ldid",
@@ -77,6 +96,7 @@ static NSString *PXShellQuote(NSString *s) {
     }
 
     return (NSDictionary *)obj;
+#endif
 }
 
 - (NSArray<NSString *> *)applicationGroupsForBundleID:(NSString *)bundleID

@@ -17,6 +17,9 @@
 #import "AppGroupContainerResolver.h"
 #import "FreezeManager.h"
 #import "common/PXProcessKiller.h"
+#ifdef PROJECTX_TROLLSTORE
+#import "PXShellRouter.h"
+#endif
 
 // Add SearchableIndex framework if available
 #import <CoreSpotlight/CoreSpotlight.h>
@@ -2958,7 +2961,12 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
     if (![command isKindOfClass:[NSString class]] || command.length == 0) {
         return;
     }
-
+#ifdef PROJECTX_TROLLSTORE
+    NSError *routerError = nil;
+    if (![[PXShellRouter sharedRouter] runShellCommand:command error:&routerError]) {
+        NSLog(@"[AppDataCleaner] Command router failed: %@ | command=%@", routerError.localizedDescription, command);
+    }
+#else
     if (timeoutSec <= 0) {
         timeoutSec = 60;
     }
@@ -2970,10 +2978,9 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
         return;
     }
 
-    // Best-effort: isolate command in its own process group so we can kill the whole tree.
     (void)setpgid(pid, pid);
 
-    const int maxWaitIterations = timeoutSec * 10; // 10 * 100ms = 1s
+    const int maxWaitIterations = timeoutSec * 10;
     int iterations = 0;
     int status = 0;
 
@@ -2982,22 +2989,21 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
         if (result == pid || result == -1) {
             return;
         }
-        usleep(100000); // 100ms
+        usleep(100000);
         iterations++;
     }
 
-    // Timeout reached: try graceful kill, then force kill.
     NSString *shortCmd = command;
     if (shortCmd.length > 240) {
         shortCmd = [shortCmd substringToIndex:240];
     }
     NSLog(@"[AppDataCleaner] Command timed out after %d sec, killing: %@", timeoutSec, shortCmd);
 
-    // Kill process group (includes /bin/sh children).
     kill(-pid, SIGTERM);
     usleep(250000);
     kill(-pid, SIGKILL);
     waitpid(pid, &status, 0);
+#endif
 }
 
 - (BOOL)verifyDataCleared:(NSString *)bundleID {
