@@ -3,6 +3,7 @@
 
 #import "PXRootHelper.h"
 #import "TSUtil.h"
+#import "PXDiagnostics.h"
 #import <sys/utsname.h>
 
 NSString *const PXRootHelperErrorDomain = @"com.hydra.projectx.roothelper";
@@ -99,6 +100,7 @@ static NSString *const kPXRootHelperBinaryName = @"weaponx_root_helper";
 
     NSString *helperPath = [self helperBinaryPath];
     if (!helperPath) {
+        [PXDiagnostics log:@"[root] helper missing"];
         if (error) {
             *error = [NSError errorWithDomain:PXRootHelperErrorDomain
                                          code:PXRootHelperErrorHelperMissing
@@ -109,6 +111,7 @@ static NSString *const kPXRootHelperBinaryName = @"weaponx_root_helper";
     }
 
     if (![self isRootSpawnAvailable]) {
+        [PXDiagnostics log:@"[root] unavailable for argv=%@", argv];
         if (error) {
             *error = [NSError errorWithDomain:PXRootHelperErrorDomain
                                          code:PXRootHelperErrorUnavailable
@@ -120,7 +123,9 @@ static NSString *const kPXRootHelperBinaryName = @"weaponx_root_helper";
 
     NSString *outStr = nil;
     NSString *errStr = nil;
+    [PXDiagnostics log:@"[root] run helper=%@ argv=%@", helperPath, argv];
     int code = spawnRoot(helperPath, argv, &outStr, &errStr);
+    [PXDiagnostics log:@"[root] result code=%d stdout=%@ stderr=%@", code, outStr ?: @"", errStr ?: @""];
 
     if (stdOut) {
         *stdOut = outStr;

@@ -2,6 +2,9 @@
 #import "ProjectX.h"
 #import "IdentifierManager.h"
 #import "common/UIButton+SafeConfiguration.h"
+#ifdef PROJECTX_TROLLSTORE
+#import "PXDiagnostics.h"
+#endif
 #import <spawn.h>
 #import <sys/wait.h>
 #import <objc/runtime.h>
@@ -290,6 +293,15 @@
 
 - (void)applyChangesAndRespring {
     UIViewController *topController = [self topViewController];
+#ifdef PROJECTX_TROLLSTORE
+    [PXDiagnostics log:@"[hooks] apply/respring tapped in TrollStore build; runtime ProjectXTweak hooks are not active under TrollStore-only app"];
+    UIAlertController *tsAlert = [UIAlertController alertControllerWithTitle:@"TrollStore Limitation"
+                                                                     message:@"This build can save ProjectX settings, but ProjectXTweak runtime hooks are not injected into other apps under TrollStore. Hook/spoof effects that depend on MobileSubstrate will not apply. Diagnostics were written to /var/mobile/Library/ProjectXTroll/diagnostic.log."
+                                                              preferredStyle:UIAlertControllerStyleAlert];
+    [tsAlert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [topController presentViewController:tsAlert animated:YES completion:nil];
+    return;
+#endif
     
     // Show confirmation alert
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Respring Required"

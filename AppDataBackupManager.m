@@ -11,6 +11,9 @@
 #import "AppGroupContainerResolver.h"
 #import "CommandRunner.h"
 #import "common/PXProcessKiller.h"
+#ifdef PROJECTX_TROLLSTORE
+#import "PXDiagnostics.h"
+#endif
 
 #import <CommonCrypto/CommonDigest.h>
 #import <notify.h>
@@ -302,6 +305,9 @@ static NSString *PXFindDataContainerUUIDByMetadata(NSFileManager *fm, NSString *
 }
 
 - (CommandResult *)_tarCreate:(NSString *)tarPath fromDir:(NSString *)sourceDir toArchive:(NSString *)archivePath {
+#ifdef PROJECTX_TROLLSTORE
+    [PXDiagnostics log:@"[backup] _tarCreate tarPath=%@ source=%@ archive=%@", tarPath ?: @"", sourceDir ?: @"", archivePath ?: @""];
+#endif
     CommandRunner *runner = [CommandRunner shared];
 
     // Prefer preserving extended attributes (file protection class), ACLs and numeric owners.
@@ -431,6 +437,9 @@ static NSString *PXCleanSubdirName(NSString *s) {
 }
 
 - (CommandResult *)_tarExtract:(NSString *)tarPath archive:(NSString *)archivePath toDir:(NSString *)destDir {
+#ifdef PROJECTX_TROLLSTORE
+    [PXDiagnostics log:@"[backup] _tarExtract tarPath=%@ archive=%@ dest=%@", tarPath ?: @"", archivePath ?: @"", destDir ?: @""];
+#endif
     CommandRunner *runner = [CommandRunner shared];
 
     // Always pass --overwrite. The caller may have failed to fully wipe the
@@ -1069,6 +1078,9 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
     }
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+#ifdef PROJECTX_TROLLSTORE
+        [PXDiagnostics log:@"[backup] start bundleID=%@ appName=%@ options=%lu", bundleID ?: @"", appName ?: @"", (unsigned long)options];
+#endif
         NSMutableArray<NSString *> *warnings = [NSMutableArray array];
         NSFileManager *fm = [NSFileManager defaultManager];
         CommandRunner *runner = [CommandRunner shared];
@@ -1091,6 +1103,9 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
             @"/bin/tar"
         ]];
         if (!tarPath) {
+#ifdef PROJECTX_TROLLSTORE
+            [PXDiagnostics log:@"[backup] tar not found for bundleID=%@", bundleID ?: @""];
+#endif
             NSError *err = [NSError errorWithDomain:PXBackupErrorDomain
                                                code:101
                                            userInfo:@{NSLocalizedDescriptionKey: @"tar not found"}];
@@ -1126,6 +1141,9 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
             }
             if (!dataContainerPath.length) {
                 NSString *lsPath = PXDataContainerPathFromLaunchServices(bundleID) ?: @"";
+#ifdef PROJECTX_TROLLSTORE
+                [PXDiagnostics log:@"[backup] data container not found bundleID=%@ lsPath=%@", bundleID ?: @"", lsPath];
+#endif
                 NSError *err = [NSError errorWithDomain:PXBackupErrorDomain
                                                    code:102
                                                userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Data container not found (bundleID=%@ lsPath=%@)", bundleID, lsPath]}];
@@ -1144,6 +1162,9 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
 
         NSString *timestamp = [self _timestampString];
         NSString *backupDir = [[[self _backupRoot] stringByAppendingPathComponent:bundleID] stringByAppendingPathComponent:timestamp];
+#ifdef PROJECTX_TROLLSTORE
+        [PXDiagnostics log:@"[backup] resolved tarPath=%@ dataContainer=%@ dataUUID=%@ backupDir=%@", tarPath ?: @"", dataContainerPath ?: @"", dataUUID ?: @"", backupDir ?: @""];
+#endif
         NSString *debugBefore = [backupDir stringByAppendingPathComponent:@"debug_before_backup.txt"];
         NSString *debugAfter = [backupDir stringByAppendingPathComponent:@"debug_after_backup.txt"];
         NSString *debugKeychain = [backupDir stringByAppendingPathComponent:@"debug_keychain.txt"];
@@ -1207,6 +1228,9 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
         CommandResult *tarRes = [self _tarCreate:tarPath fromDir:dataContainerPath toArchive:dataArchivePath];
         if (tarRes.exitCode != 0 || ![fm fileExistsAtPath:dataArchivePath]) {
             NSString *msg = tarRes.stderrString.length ? tarRes.stderrString : @"tar failed for data container";
+#ifdef PROJECTX_TROLLSTORE
+            [PXDiagnostics log:@"[backup] data tar failed exit=%d stderr=%@ stdout=%@ archiveExists=%@", (int)tarRes.exitCode, tarRes.stderrString ?: @"", tarRes.stdoutString ?: @"", [fm fileExistsAtPath:dataArchivePath] ? @"YES" : @"NO"];
+#endif
             NSError *err = [NSError errorWithDomain:PXBackupErrorDomain
                                                code:105
                                            userInfo:@{NSLocalizedDescriptionKey: msg}];

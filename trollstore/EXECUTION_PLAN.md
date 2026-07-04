@@ -185,6 +185,11 @@ Phụ thuộc `TSUtil` thật.
   `posix_spawn` (trừ PXProcessKiller/PXRootHelper), `system(`, `popen(`.
 - **G6.3** UI surface lỗi: chèn banner `PXRootHelperErrorUnavailable` tại VC
   gọi clean/backup — khảo sát VC trước. Đây là chỗ UI được đụng.
+- **Diagnostics hiện tại**: đã thêm `PXDiagnostics` ghi log tại
+  `/var/mobile/Library/ProjectXTroll/diagnostic.log`, menu tạm `Diag` trong
+  `ToolViewController`, self-test environment/root-helper/router, instrumentation
+  cho `PXShellRouter`, `PXRootHelper`, backup start/tar failure và warning rõ rằng
+  runtime hooks của `ProjectXTweak` không hoạt động trong TrollStore-only app.
 - **G6.4** smoke test 8 scenario × 2 device.
 - **G6.5** đồng bộ tài liệu: cập nhật `HANDOFF.md` (đang lệch) + `MIGRATION_PLAN.md`
   + thêm `ROUTER_REFERENCE.md`.

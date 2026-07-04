@@ -9,6 +9,9 @@
 #import <sys/socket.h>
 #import <fcntl.h>
 #import "DoorDashOrderViewController.h"
+#ifdef PROJECTX_TROLLSTORE
+#import "PXDiagnostics.h"
+#endif
 
 // For network activities
 @interface NetworkSpeedTest : NSObject
@@ -457,6 +460,14 @@
                                                                                target:self 
                                                                                action:@selector(dismissViewController)];
     self.navigationItem.leftBarButtonItem = doneButton;
+
+#ifdef PROJECTX_TROLLSTORE
+    UIBarButtonItem *diagButton = [[UIBarButtonItem alloc] initWithTitle:@"Diag"
+                                                                   style:UIBarButtonItemStylePlain
+                                                                  target:self
+                                                                  action:@selector(px_showTrollStoreDiagnosticsMenu)];
+    self.navigationItem.rightBarButtonItem = diagButton;
+#endif
     
     // Initialize table view
     self.tableView = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStyleInsetGrouped];
@@ -468,6 +479,49 @@
     // Register table view cells
     [self.tableView registerClass:[UITableViewCell class] forCellReuseIdentifier:@"ToolCell"];
 }
+
+#ifdef PROJECTX_TROLLSTORE
+- (void)px_showTrollStoreDiagnosticsMenu {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"TrollStore Diagnostics"
+                                                                   message:[NSString stringWithFormat:@"Log: %@", [PXDiagnostics logPath]]
+                                                            preferredStyle:UIAlertControllerStyleActionSheet];
+
+    __weak typeof(self) weakSelf = self;
+    void (^showResult)(NSString *, NSDictionary *) = ^(NSString *title, NSDictionary *result) {
+        typeof(weakSelf) selfRef = weakSelf;
+        if (!selfRef) return;
+        NSString *msg = [NSString stringWithFormat:@"%@\n\nLog:\n%@", result.description ?: @"(no result)", [PXDiagnostics logPath]];
+        UIAlertController *out = [UIAlertController alertControllerWithTitle:title
+                                                                     message:msg
+                                                              preferredStyle:UIAlertControllerStyleAlert];
+        [out addAction:[UIAlertAction actionWithTitle:@"Copy Log Tail" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+            [UIPasteboard generalPasteboard].string = [PXDiagnostics readLogTailWithMaxBytes:12000];
+        }]];
+        [out addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+        [selfRef presentViewController:out animated:YES completion:nil];
+    };
+
+    [alert addAction:[UIAlertAction actionWithTitle:@"Run Environment Check" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        showResult(@"Environment Check", [PXDiagnostics environmentSnapshot]);
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Run Root Helper Test" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        showResult(@"Root Helper Test", [PXDiagnostics rootHelperSelfTest]);
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Run Router Fixture Test" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        showResult(@"Router Fixture Test", [PXDiagnostics routerFixtureSelfTest]);
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Copy Log Tail" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        [UIPasteboard generalPasteboard].string = [PXDiagnostics readLogTailWithMaxBytes:20000];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Clear Log" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
+        [PXDiagnostics clearLog];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    UIPopoverPresentationController *popover = alert.popoverPresentationController;
+    popover.barButtonItem = self.navigationItem.rightBarButtonItem;
+    [self presentViewController:alert animated:YES completion:nil];
+}
+#endif
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];

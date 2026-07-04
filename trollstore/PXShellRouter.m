@@ -3,6 +3,7 @@
 #import "PXShellRouter.h"
 #import "PXFileOps.h"
 #import "PXRootHelper.h"
+#import "PXDiagnostics.h"
 
 #import <fnmatch.h>
 #import <errno.h>
@@ -197,6 +198,7 @@ static BOOL PXChflagsPath(NSString *path, BOOL recursive, NSError **error) {
 
 - (BOOL)runShellCommand:(NSString *)command error:(NSError **)outError {
     if (![command isKindOfClass:[NSString class]] || command.length == 0) return YES;
+    [PXDiagnostics log:@"[router] raw=%@", command];
     BOOL okAll = YES;
     for (NSDictionary *seg in [PXShellRouter parseCompositeCommand:command]) {
         NSString *raw = seg[@"command"];
@@ -212,9 +214,11 @@ static BOOL PXChflagsPath(NSString *path, BOOL recursive, NSError **error) {
         }
 
         NSError *err = nil;
+        [PXDiagnostics log:@"[router] segment=%@ bestEffort=%@", cmd, bestEffort ? @"YES" : @"NO"];
         BOOL ok = [self runSingleCommand:cmd error:&err];
         if (!ok) {
             self.lastError = err;
+            [PXDiagnostics log:@"[router] failed segment=%@ error=%@", cmd, err.localizedDescription ?: @""];
             if (bestEffort) {
                 NSLog(@"[PXShellRouter] best-effort command failed: %@ (%@)", cmd, err.localizedDescription);
                 continue;
@@ -240,6 +244,7 @@ static BOOL PXChflagsPath(NSString *path, BOOL recursive, NSError **error) {
     }
     if (!argv.count) return YES;
     NSString *op = argv[0];
+    [PXDiagnostics log:@"[router] argv=%@", argv];
     if ([op isEqualToString:@"rm"]) return [self handleRm:argv error:error];
     if ([op isEqualToString:@"mkdir"]) return [self handleMkdir:argv error:error];
     if ([op isEqualToString:@"chmod"]) return [self handleChmod:argv error:error];

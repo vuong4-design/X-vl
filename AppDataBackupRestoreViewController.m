@@ -2,6 +2,9 @@
 #import "common/UIButton+SafeConfiguration.h"
 #import "AppDataBackupManager.h"
 #import "BackupKeychainGroupsViewController.h"
+#ifdef PROJECTX_TROLLSTORE
+#import "PXDiagnostics.h"
+#endif
 #import <objc/message.h>
 
 @interface LSApplicationWorkspace : NSObject
@@ -414,6 +417,9 @@ static void PXAttemptBringProjectXToFront(void) {
 
 - (void)backupButtonTapped {
     NSString *appIdentifier = self.appName ?: self.bundleID ?: @"this app";
+#ifdef PROJECTX_TROLLSTORE
+    [PXDiagnostics log:@"[backup-ui] backup tapped bundleID=%@ appName=%@", self.bundleID ?: @"", self.appName ?: @""];
+#endif
     
     // Show a confirmation alert first
     UIAlertController *confirmAlert = [UIAlertController alertControllerWithTitle:@"Confirm Backup"
@@ -444,8 +450,11 @@ static void PXAttemptBringProjectXToFront(void) {
                                                        options:options
                                                     completion:^(PXBackupResult *result, NSError *error) {
              [processingAlert dismissViewControllerAnimated:YES completion:^{
-                 if (error) {
-                     UIAlertController *errAlert = [UIAlertController alertControllerWithTitle:@"Backup Failed"
+                  if (error) {
+#ifdef PROJECTX_TROLLSTORE
+                     [PXDiagnostics log:@"[backup-ui] backup failed error=%@", error.localizedDescription ?: @""];
+#endif
+                      UIAlertController *errAlert = [UIAlertController alertControllerWithTitle:@"Backup Failed"
                                                                                       message:error.localizedDescription ?: @"Unknown error"
                                                                                preferredStyle:UIAlertControllerStyleAlert];
                      [errAlert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
@@ -456,6 +465,9 @@ static void PXAttemptBringProjectXToFront(void) {
                  }
 
                 NSMutableString *msg = [NSMutableString stringWithFormat:@"Backup created for %@.\n\nPath:\n%@", appIdentifier, result.backupDirectory ?: @"(unknown)"];
+#ifdef PROJECTX_TROLLSTORE
+                [PXDiagnostics log:@"[backup-ui] backup complete dir=%@ warnings=%@", result.backupDirectory ?: @"", result.warnings ?: @[]];
+#endif
                 if (result.warnings.count) {
                     [msg appendString:@"\n\nWarnings:\n"]; 
                     for (NSString *w in result.warnings) {
@@ -473,6 +485,9 @@ static void PXAttemptBringProjectXToFront(void) {
 
 - (void)restoreButtonTapped {
     NSString *appIdentifier = self.appName ?: self.bundleID ?: @"this app";
+#ifdef PROJECTX_TROLLSTORE
+    [PXDiagnostics log:@"[restore-ui] restore tapped bundleID=%@ appName=%@", self.bundleID ?: @"", self.appName ?: @""];
+#endif
     
     // Show a confirmation alert first with warning
     UIAlertController *confirmAlert = [UIAlertController alertControllerWithTitle:@"Confirm Restore"
