@@ -96,10 +96,7 @@ internal-stage::
 	@echo "Building root helper..."
 	@$(MAKE) -C $(TROLLSTORE_DIR)/helper package || (echo "Helper build failed" && exit 1)
 	@echo "Installing root helper into app bundle..."
-	@HELPER_BIN="$(TROLLSTORE_DIR)/helper/.theos/obj/debug/weaponx_root_helper"; \
-	if [ ! -f "$$HELPER_BIN" ]; then \
-		HELPER_BIN="$(TROLLSTORE_DIR)/helper/.theos/obj/weaponx_root_helper"; \
-	fi; \
+	@HELPER_BIN="$$(find $(TROLLSTORE_DIR)/helper/.theos/obj -type f -name weaponx_root_helper | head -n 1)"; \
 	if [ ! -f "$$HELPER_BIN" ]; then \
 		echo "weaponx_root_helper binary not found after build"; exit 1; \
 	fi; \

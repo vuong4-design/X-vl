@@ -102,6 +102,8 @@ MobileContainerManager, UIKit, CoreTelephony.
 - [x] `AppEntitlementsReader.m` sạch `ldid`/`CommandRunner`/`PXShellQuote`.
 - [x] Caller downstream (`applicationGroupsForBundleID:`, `keychainAccessGroupsForBundleID:`)
   nhận `NSDictionary` đúng như cũ.
+- [x] GitHub Action `.github/workflows/trollstore-build.yml` đã thêm để build riêng
+  target `trollstore/app`.
 - [ ] Compile pass arm64 + arm64e (chưa chạy/chưa pass trong phiên này).
 
 ---

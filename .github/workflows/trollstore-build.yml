@@ -1,0 +1,74 @@
+name: TrollStore Test Build
+
+on:
+  push:
+    paths:
+      - "*.m"
+      - "*.h"
+      - "common/**"
+      - "trollstore/**"
+      - "Assets.xcassets/**"
+      - "Icon.png"
+      - "LaunchScreen.storyboard"
+      - "ent.plist"
+      - ".github/workflows/trollstore-build.yml"
+  pull_request:
+    paths:
+      - "*.m"
+      - "*.h"
+      - "common/**"
+      - "trollstore/**"
+      - "Assets.xcassets/**"
+      - "Icon.png"
+      - "LaunchScreen.storyboard"
+      - "ent.plist"
+      - ".github/workflows/trollstore-build.yml"
+  workflow_dispatch:
+
+jobs:
+  build-trollstore:
+    name: Build ProjectXTroll
+    runs-on: macos-14
+    timeout-minutes: 45
+
+    env:
+      THEOS: ${{ github.workspace }}/theos
+      THEOS_DEVICE_IP: 127.0.0.1
+      FINALPACKAGE: 0
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          brew update
+          brew install ldid xz dpkg make
+
+      - name: Checkout Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$THEOS"
+
+      - name: Install iPhoneOS SDK
+        run: |
+          mkdir -p "$THEOS/sdks"
+          curl -L -o /tmp/iPhoneOS16.5.sdk.tar.xz \
+            https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz
+          tar -xf /tmp/iPhoneOS16.5.sdk.tar.xz -C "$THEOS/sdks"
+          ls -la "$THEOS/sdks"
+
+      - name: Build TrollStore app target
+        working-directory: trollstore/app
+        run: |
+          make clean package messages=yes FINALPACKAGE=0
+
+      - name: Upload TrollStore build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: projectxtroll-build-output
+          path: |
+            trollstore/app/packages/**
+            trollstore/app/.theos/obj/**
+            trollstore/helper/.theos/obj/**
+          if-no-files-found: ignore
