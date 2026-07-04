@@ -86,9 +86,19 @@ jobs:
               continue
             fi
             if [ ! -f "$candidate/$EXECUTABLE" ]; then
-              echo "  skip: missing executable $candidate/$EXECUTABLE"
-              find "$candidate" -maxdepth 1 -type f -print || true
-              continue
+              echo "  executable missing from app bundle; searching Theos obj output for $EXECUTABLE"
+              EXEC_SOURCE="$(find trollstore/app/.theos/obj -type f -name "$EXECUTABLE" ! -path "*/$EXECUTABLE.app/*" | sort | head -n 1)"
+              if [ -z "$EXEC_SOURCE" ] || [ ! -f "$EXEC_SOURCE" ]; then
+                echo "  skip: missing executable $candidate/$EXECUTABLE and no standalone build output found"
+                echo "  files at app root:"
+                find "$candidate" -maxdepth 1 -type f -print || true
+                echo "  possible executable outputs:"
+                find trollstore/app/.theos/obj -type f -name "$EXECUTABLE" -print || true
+                continue
+              fi
+              echo "  copying executable from $EXEC_SOURCE"
+              cp "$EXEC_SOURCE" "$candidate/$EXECUTABLE"
+              chmod 755 "$candidate/$EXECUTABLE"
             fi
             APP_PATH="$candidate"
             break
