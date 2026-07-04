@@ -69,13 +69,37 @@ jobs:
             exit 1
           fi
 
+      - name: Package TrollStore .tipa
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find trollstore/app/.theos -type d -name ProjectXTroll.app | head -n 1)"
+          if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
+            echo "ProjectXTroll.app not found under trollstore/app/.theos"
+            find trollstore/app/.theos -maxdepth 5 -type d -name "*.app" -print || true
+            exit 1
+          fi
+          echo "Packaging app: $APP_PATH"
+          rm -rf trollstore/app/tipa
+          mkdir -p trollstore/app/tipa/Payload
+          cp -a "$APP_PATH" trollstore/app/tipa/Payload/
+          (cd trollstore/app/tipa && zip -qry ../ProjectXTroll.tipa Payload)
+          ls -lh trollstore/app/ProjectXTroll.tipa
+
       - name: Upload TrollStore build artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: projectxtroll-build-output
           path: |
+            trollstore/app/ProjectXTroll.tipa
             trollstore/app/packages/**
             trollstore/app/.theos/obj/**
             trollstore/helper/.theos/obj/**
           if-no-files-found: ignore
+
+      - name: Upload ProjectXTroll tipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProjectXTroll.tipa
+          path: trollstore/app/ProjectXTroll.tipa
+          if-no-files-found: error
