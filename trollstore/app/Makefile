@@ -81,6 +81,7 @@ ProjectXTroll_CFLAGS = \
 	-Wno-error=unguarded-availability-new \
 	-Wno-error=unused-function \
 	-Wno-error=unused-variable \
+	-Wno-error=unused-but-set-variable \
 	-Wno-error=incomplete-implementation \
 	-I$(REPO_ROOT) \
 	-I$(REPO_ROOT)/common \
