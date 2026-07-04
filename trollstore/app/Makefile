@@ -103,10 +103,14 @@ internal-stage::
 	@echo "Building root helper..."
 	@$(MAKE) -C $(TROLLSTORE_DIR)/helper clean all messages=yes FINALPACKAGE=0 || (echo "Helper build failed" && exit 1)
 	@echo "Installing root helper into app bundle..."
-	@HELPER_BIN="$$(find $(TROLLSTORE_DIR)/helper/.theos/obj -type f -name weaponx_root_helper | head -n 1)"; \
+	@HELPER_BIN="$$(find $(TROLLSTORE_DIR)/helper $(THEOS_OBJ_DIR) .theos -type f -name weaponx_root_helper 2>/dev/null | head -n 1)"; \
 	if [ ! -f "$$HELPER_BIN" ]; then \
-		echo "weaponx_root_helper binary not found after build"; exit 1; \
+		echo "weaponx_root_helper binary not found after build"; \
+		echo "Searched helper tree and app .theos output:"; \
+		find $(TROLLSTORE_DIR)/helper .theos -maxdepth 8 -print 2>/dev/null || true; \
+		exit 1; \
 	fi; \
+	echo "Using helper binary: $$HELPER_BIN"; \
 	cp "$$HELPER_BIN" $(THEOS_STAGING_DIR)/Applications/ProjectXTroll.app/weaponx_root_helper; \
 	chmod 755 $(THEOS_STAGING_DIR)/Applications/ProjectXTroll.app/weaponx_root_helper
 	@echo "TSRootBinaries declared in trollstore/app/Info.plist"
