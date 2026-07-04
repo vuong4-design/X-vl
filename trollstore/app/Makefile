@@ -41,6 +41,7 @@ ProjectXTroll_FILES = \
 
 ProjectXTroll_RESOURCE_DIRS = $(REPO_ROOT)/Assets.xcassets
 ProjectXTroll_RESOURCE_FILES = \
+	Info.plist \
 	$(REPO_ROOT)/Icon.png \
 	$(REPO_ROOT)/LaunchScreen.storyboard
 

@@ -77,8 +77,8 @@ jobs:
           while IFS= read -r candidate; do
             echo "Candidate: $candidate"
             if [ ! -f "$candidate/Info.plist" ]; then
-              echo "  skip: missing Info.plist"
-              continue
+              echo "  Info.plist missing; injecting trollstore/app/Info.plist"
+              cp trollstore/app/Info.plist "$candidate/Info.plist"
             fi
             EXECUTABLE="$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$candidate/Info.plist" 2>/dev/null || true)"
             if [ -z "$EXECUTABLE" ]; then
