@@ -79,6 +79,8 @@ ProjectXTroll_CFLAGS = \
 	-D ENABLE_STATE_RESTORATION=1 \
 	-D PROJECTX_TROLLSTORE=1 \
 	-Wno-error=unguarded-availability-new \
+	-Wno-error=unused-function \
+	-Wno-error=unused-variable \
 	-I$(REPO_ROOT) \
 	-I$(REPO_ROOT)/common \
 	-I$(TROLLSTORE_DIR)
