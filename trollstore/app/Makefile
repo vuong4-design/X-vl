@@ -101,7 +101,7 @@ internal-stage::
 	@echo "Installing TrollStore Info.plist..."
 	@cp Info.plist $(THEOS_STAGING_DIR)/Applications/ProjectXTroll.app/Info.plist
 	@echo "Building root helper..."
-	@$(MAKE) -C $(TROLLSTORE_DIR)/helper package || (echo "Helper build failed" && exit 1)
+	@$(MAKE) -C $(TROLLSTORE_DIR)/helper clean all messages=yes FINALPACKAGE=0 || (echo "Helper build failed" && exit 1)
 	@echo "Installing root helper into app bundle..."
 	@HELPER_BIN="$$(find $(TROLLSTORE_DIR)/helper/.theos/obj -type f -name weaponx_root_helper | head -n 1)"; \
 	if [ ! -f "$$HELPER_BIN" ]; then \
