@@ -78,6 +78,7 @@ ProjectXTroll_CFLAGS = \
 	-D SUPPORT_IPAD=1 \
 	-D ENABLE_STATE_RESTORATION=1 \
 	-D PROJECTX_TROLLSTORE=1 \
+	-Wno-error=unguarded-availability-new \
 	-I$(REPO_ROOT) \
 	-I$(REPO_ROOT)/common \
 	-I$(TROLLSTORE_DIR)

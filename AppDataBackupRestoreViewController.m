@@ -152,6 +152,7 @@ static void PXAttemptBringProjectXToFront(void) {
 
     // Keychain groups selector (enabled only when keychain toggle is on)
     self.keychainGroupsButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    if (@available(iOS 15.0, *)) {
     if ([UIButton buttonConfigurationClassExists]) {
         UIButtonConfiguration *cfg = [UIButtonConfiguration plainButtonConfiguration];
         cfg.title = @"Keychain Groups";
@@ -160,6 +161,9 @@ static void PXAttemptBringProjectXToFront(void) {
         cfg.imagePadding = 6;
         cfg.baseForegroundColor = [UIColor systemBlueColor];
         [self.keychainGroupsButton safeSetConfiguration:cfg];
+    } else {
+        [self.keychainGroupsButton setTitle:@"Keychain Groups" forState:UIControlStateNormal];
+    }
     } else {
         [self.keychainGroupsButton setTitle:@"Keychain Groups" forState:UIControlStateNormal];
     }
@@ -184,6 +188,7 @@ static void PXAttemptBringProjectXToFront(void) {
     
     // Create stylish buttons with icons using UIButtonConfiguration (iOS 15+)
     UIButton *backupButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    if (@available(iOS 15.0, *)) {
     if ([UIButton buttonConfigurationClassExists]) {
         UIButtonConfiguration *backupConfig = [UIButtonConfiguration filledButtonConfiguration];
         backupConfig.title = @"Backup App Data";
@@ -204,6 +209,15 @@ static void PXAttemptBringProjectXToFront(void) {
         backupButton.contentEdgeInsets = UIEdgeInsetsMake(12, 20, 12, 20);
         #pragma clang diagnostic pop
     }
+    } else {
+        [backupButton setTitle:@"Backup App Data" forState:UIControlStateNormal];
+        [backupButton setImage:[UIImage systemImageNamed:@"arrow.down.doc.fill"] forState:UIControlStateNormal];
+        backupButton.tintColor = [UIColor systemBlueColor];
+        #pragma clang diagnostic push
+        #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        backupButton.contentEdgeInsets = UIEdgeInsetsMake(12, 20, 12, 20);
+        #pragma clang diagnostic pop
+    }
     
     // Add rounded corners and border
     backupButton.layer.cornerRadius = 10;
@@ -215,6 +229,7 @@ static void PXAttemptBringProjectXToFront(void) {
     
     // Create restore button with UIButtonConfiguration (iOS 15+)
     UIButton *restoreButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    if (@available(iOS 15.0, *)) {
     if ([UIButton buttonConfigurationClassExists]) {
         UIButtonConfiguration *restoreConfig = [UIButtonConfiguration filledButtonConfiguration];
         restoreConfig.title = @"Restore App Data";
@@ -226,6 +241,15 @@ static void PXAttemptBringProjectXToFront(void) {
         restoreConfig.baseBackgroundColor = [UIColor clearColor];
         restoreConfig.baseForegroundColor = [UIColor systemGreenColor];
         [restoreButton safeSetConfiguration:restoreConfig];
+    } else {
+        [restoreButton setTitle:@"Restore App Data" forState:UIControlStateNormal];
+        [restoreButton setImage:[UIImage systemImageNamed:@"arrow.up.doc.fill"] forState:UIControlStateNormal];
+        restoreButton.tintColor = [UIColor systemGreenColor];
+        #pragma clang diagnostic push
+        #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        restoreButton.contentEdgeInsets = UIEdgeInsetsMake(12, 20, 12, 20);
+        #pragma clang diagnostic pop
+    }
     } else {
         [restoreButton setTitle:@"Restore App Data" forState:UIControlStateNormal];
         [restoreButton setImage:[UIImage systemImageNamed:@"arrow.up.doc.fill"] forState:UIControlStateNormal];
@@ -360,6 +384,7 @@ static void PXAttemptBringProjectXToFront(void) {
     }
 
     NSString *title = (count > 0) ? [NSString stringWithFormat:@"Keychain Groups (%lu)", (unsigned long)count] : @"Keychain Groups";
+    if (@available(iOS 15.0, *)) {
     if ([UIButton buttonConfigurationClassExists]) {
         if (self.keychainGroupsButton.configuration) {
             UIButtonConfiguration *cfg = [self.keychainGroupsButton.configuration copy];
@@ -367,6 +392,7 @@ static void PXAttemptBringProjectXToFront(void) {
             [self.keychainGroupsButton setConfiguration:cfg];
             return;
         }
+    }
     }
     [self.keychainGroupsButton setTitle:title forState:UIControlStateNormal];
 }
