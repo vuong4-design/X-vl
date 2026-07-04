@@ -72,13 +72,26 @@ jobs:
       - name: Package TrollStore .tipa
         run: |
           set -euo pipefail
-          APP_PATH="$(find trollstore/app/.theos -type d -name ProjectXTroll.app | head -n 1)"
+          APP_PATH="trollstore/app/.theos/_/Applications/ProjectXTroll.app"
           if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
-            echo "ProjectXTroll.app not found under trollstore/app/.theos"
+            echo "Staged ProjectXTroll.app not found at $APP_PATH"
             find trollstore/app/.theos -maxdepth 5 -type d -name "*.app" -print || true
             exit 1
           fi
           echo "Packaging app: $APP_PATH"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist"
+          EXECUTABLE="$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist")"
+          if [ -z "$EXECUTABLE" ] || [ ! -f "$APP_PATH/$EXECUTABLE" ]; then
+            echo "Main executable '$EXECUTABLE' missing from $APP_PATH"
+            find "$APP_PATH" -maxdepth 1 -type f -print
+            exit 1
+          fi
+          if [ ! -x "$APP_PATH/$EXECUTABLE" ]; then
+            echo "Main executable '$EXECUTABLE' exists but is not executable; fixing mode"
+            chmod 755 "$APP_PATH/$EXECUTABLE"
+          fi
+          /usr/libexec/PlistBuddy -c "Print :TSRootBinaries" "$APP_PATH/Info.plist"
+          test -f "$APP_PATH/weaponx_root_helper"
           rm -rf trollstore/app/tipa
           mkdir -p trollstore/app/tipa/Payload
           cp -a "$APP_PATH" trollstore/app/tipa/Payload/

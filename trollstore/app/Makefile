@@ -41,7 +41,6 @@ ProjectXTroll_FILES = \
 
 ProjectXTroll_RESOURCE_DIRS = $(REPO_ROOT)/Assets.xcassets
 ProjectXTroll_RESOURCE_FILES = \
-	Info.plist \
 	$(REPO_ROOT)/Icon.png \
 	$(REPO_ROOT)/LaunchScreen.storyboard
 
@@ -96,6 +95,8 @@ include $(THEOS_MAKE_PATH)/application.mk
 # Build the helper first (from trollstore/helper/Makefile), then copy its
 # output binary into the app bundle root.
 internal-stage::
+	@echo "Installing TrollStore Info.plist..."
+	@cp Info.plist $(THEOS_STAGING_DIR)/Applications/ProjectXTroll.app/Info.plist
 	@echo "Building root helper..."
 	@$(MAKE) -C $(TROLLSTORE_DIR)/helper package || (echo "Helper build failed" && exit 1)
 	@echo "Installing root helper into app bundle..."
