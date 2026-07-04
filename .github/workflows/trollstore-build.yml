@@ -68,13 +68,34 @@ jobs:
             echo "ERROR: TrollStore workflow unexpectedly built ProjectXTweak. Check workflow/lệnh build đang chạy."
             exit 1
           fi
+          echo "Theos obj layout:"
+          find trollstore/app/.theos/obj -maxdepth 8 -print | sort || true
+          echo "Theos obj files:"
+          find trollstore/app/.theos/obj -maxdepth 10 -type f -exec ls -lh {} \; | sort || true
+          echo "Theos staged layout:"
+          find trollstore/app/.theos/_ -maxdepth 8 -print | sort || true
+          echo "Theos packages:"
+          find trollstore/app/packages -maxdepth 2 -type f -print | sort || true
 
       - name: Package TrollStore .tipa
         run: |
           set -euo pipefail
-          APP_PATH=""
+          WORK_DIR="trollstore/app/tipa-work"
+          rm -rf "$WORK_DIR" trollstore/app/tipa trollstore/app/ProjectXTroll.tipa
+          mkdir -p "$WORK_DIR"
+
+          DEB_PATH="$(find trollstore/app/packages -type f -name "*.deb" | sort | tail -n 1 || true)"
+          if [ -n "$DEB_PATH" ] && [ -f "$DEB_PATH" ]; then
+            echo "Extracting app from package: $DEB_PATH"
+            dpkg-deb -x "$DEB_PATH" "$WORK_DIR"
+            echo "Extracted package layout:"
+            find "$WORK_DIR" -maxdepth 8 -print | sort || true
+          fi
+
           echo "Searching for ProjectXTroll.app candidates..."
+          APP_PATH=""
           while IFS= read -r candidate; do
+            [ -z "$candidate" ] && continue
             echo "Candidate: $candidate"
             if [ ! -f "$candidate/Info.plist" ]; then
               echo "  Info.plist missing; injecting trollstore/app/Info.plist"
@@ -102,10 +123,14 @@ jobs:
             fi
             APP_PATH="$candidate"
             break
-          done < <(find trollstore/app/.theos -type d -name ProjectXTroll.app | sort)
+          done < <(find "$WORK_DIR" trollstore/app/.theos -type d -name ProjectXTroll.app | sort)
 
           if [ -z "$APP_PATH" ]; then
-            echo "No valid ProjectXTroll.app candidate found under trollstore/app/.theos"
+            echo "No valid ProjectXTroll.app candidate found under extracted package or trollstore/app/.theos"
+            echo "All app candidates:"
+            find "$WORK_DIR" trollstore/app/.theos -maxdepth 8 -type d -name "*.app" -print || true
+            echo "All files named ProjectXTroll or executable-like outputs:"
+            find "$WORK_DIR" trollstore/app/.theos -maxdepth 12 -type f \( -name "ProjectXTroll" -o -perm -111 \) -exec ls -lh {} \; || true
             find trollstore/app/.theos -maxdepth 8 -type d -name "*.app" -print || true
             exit 1
           fi
