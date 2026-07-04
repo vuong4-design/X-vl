@@ -59,11 +59,12 @@ jobs:
 
       - name: Build TrollStore app target
         run: |
+          set -euo pipefail
           echo "Repository root: $PWD"
           echo "Building only trollstore/app/Makefile"
           test -f trollstore/app/Makefile
           grep -n "APPLICATION_NAME = ProjectXTroll" trollstore/app/Makefile
-          make -C trollstore/app -f Makefile clean package messages=yes FINALPACKAGE=0 2>&1 | tee /tmp/projectxtroll-build.log
+          make -C trollstore/app -f Makefile clean all stage messages=yes FINALPACKAGE=0 2>&1 | tee /tmp/projectxtroll-build.log
           if grep -q "ProjectXTweak/" /tmp/projectxtroll-build.log; then
             echo "ERROR: TrollStore workflow unexpectedly built ProjectXTweak. Check workflow/lệnh build đang chạy."
             exit 1
@@ -107,14 +108,18 @@ jobs:
               continue
             fi
             if [ ! -f "$candidate/$EXECUTABLE" ]; then
-              echo "  executable missing from app bundle; searching Theos obj output for $EXECUTABLE"
-              EXEC_SOURCE="$(find trollstore/app/.theos/obj -type f -name "$EXECUTABLE" ! -path "*/$EXECUTABLE.app/*" | sort | head -n 1)"
+              echo "  executable missing from app bundle; searching Theos output for $EXECUTABLE"
+              EXEC_SOURCE="$(find trollstore/app/.theos -type f -name "$EXECUTABLE" ! -path "*/$EXECUTABLE.app/*" | sort | head -n 1)"
+              if [ -z "$EXEC_SOURCE" ] || [ ! -f "$EXEC_SOURCE" ]; then
+                echo "  searching for any Mach-O executable output as fallback"
+                EXEC_SOURCE="$(find trollstore/app/.theos -type f ! -path "*/ProjectXTroll.app/*" -perm -111 -exec sh -c 'file "$1" | grep -q "Mach-O"' sh {} \; -print | sort | head -n 1)"
+              fi
               if [ -z "$EXEC_SOURCE" ] || [ ! -f "$EXEC_SOURCE" ]; then
                 echo "  skip: missing executable $candidate/$EXECUTABLE and no standalone build output found"
                 echo "  files at app root:"
                 find "$candidate" -maxdepth 1 -type f -print || true
                 echo "  possible executable outputs:"
-                find trollstore/app/.theos/obj -type f -name "$EXECUTABLE" -print || true
+                find trollstore/app/.theos -type f -exec sh -c 'printf "%s: " "$1"; file "$1"' sh {} \; | sort || true
                 continue
               fi
               echo "  copying executable from $EXEC_SOURCE"
