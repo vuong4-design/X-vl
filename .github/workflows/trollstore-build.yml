@@ -58,9 +58,16 @@ jobs:
           ls -la "$THEOS/sdks"
 
       - name: Build TrollStore app target
-        working-directory: trollstore/app
         run: |
-          make clean package messages=yes FINALPACKAGE=0
+          echo "Repository root: $PWD"
+          echo "Building only trollstore/app/Makefile"
+          test -f trollstore/app/Makefile
+          grep -n "APPLICATION_NAME = ProjectXTroll" trollstore/app/Makefile
+          make -C trollstore/app -f Makefile clean package messages=yes FINALPACKAGE=0 2>&1 | tee /tmp/projectxtroll-build.log
+          if grep -q "ProjectXTweak/" /tmp/projectxtroll-build.log; then
+            echo "ERROR: TrollStore workflow unexpectedly built ProjectXTweak. Check workflow/lệnh build đang chạy."
+            exit 1
+          fi
 
       - name: Upload TrollStore build artifacts
         if: always()
