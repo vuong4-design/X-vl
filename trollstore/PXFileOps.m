@@ -4,6 +4,7 @@
 #import "PXFileOps.h"
 #import <sys/stat.h>
 #import <sys/types.h>
+#import <sys/time.h>
 #import <unistd.h>
 #import <fcntl.h>
 #import <fnmatch.h>
