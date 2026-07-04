@@ -72,12 +72,34 @@ jobs:
       - name: Package TrollStore .tipa
         run: |
           set -euo pipefail
-          APP_PATH="trollstore/app/.theos/_/Applications/ProjectXTroll.app"
-          if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
-            echo "Staged ProjectXTroll.app not found at $APP_PATH"
-            find trollstore/app/.theos -maxdepth 5 -type d -name "*.app" -print || true
+          APP_PATH=""
+          echo "Searching for ProjectXTroll.app candidates..."
+          while IFS= read -r candidate; do
+            echo "Candidate: $candidate"
+            if [ ! -f "$candidate/Info.plist" ]; then
+              echo "  skip: missing Info.plist"
+              continue
+            fi
+            EXECUTABLE="$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$candidate/Info.plist" 2>/dev/null || true)"
+            if [ -z "$EXECUTABLE" ]; then
+              echo "  skip: missing CFBundleExecutable"
+              continue
+            fi
+            if [ ! -f "$candidate/$EXECUTABLE" ]; then
+              echo "  skip: missing executable $candidate/$EXECUTABLE"
+              find "$candidate" -maxdepth 1 -type f -print || true
+              continue
+            fi
+            APP_PATH="$candidate"
+            break
+          done < <(find trollstore/app/.theos -type d -name ProjectXTroll.app | sort)
+
+          if [ -z "$APP_PATH" ]; then
+            echo "No valid ProjectXTroll.app candidate found under trollstore/app/.theos"
+            find trollstore/app/.theos -maxdepth 8 -type d -name "*.app" -print || true
             exit 1
           fi
+
           echo "Packaging app: $APP_PATH"
           /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist"
           EXECUTABLE="$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist")"
@@ -91,6 +113,17 @@ jobs:
             chmod 755 "$APP_PATH/$EXECUTABLE"
           fi
           /usr/libexec/PlistBuddy -c "Print :TSRootBinaries" "$APP_PATH/Info.plist"
+          if [ ! -f "$APP_PATH/weaponx_root_helper" ]; then
+            echo "weaponx_root_helper missing from app bundle; copying from helper build output"
+            HELPER_BIN="$(find trollstore/helper/.theos/obj -type f -name weaponx_root_helper | head -n 1)"
+            if [ -z "$HELPER_BIN" ] || [ ! -f "$HELPER_BIN" ]; then
+              echo "weaponx_root_helper binary not found under trollstore/helper/.theos/obj"
+              find trollstore/helper/.theos -maxdepth 8 -type f -name "weaponx_root_helper" -print || true
+              exit 1
+            fi
+            cp "$HELPER_BIN" "$APP_PATH/weaponx_root_helper"
+            chmod 755 "$APP_PATH/weaponx_root_helper"
+          fi
           test -f "$APP_PATH/weaponx_root_helper"
           rm -rf trollstore/app/tipa
           mkdir -p trollstore/app/tipa/Payload
