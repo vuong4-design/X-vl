@@ -119,9 +119,10 @@ internal-stage::
 	cp "$$HELPER_BIN" $(THEOS_STAGING_DIR)/Applications/ProjectXTroll.app/weaponx_root_helper; \
 	chmod 755 $(THEOS_STAGING_DIR)/Applications/ProjectXTroll.app/weaponx_root_helper
 	@echo "Installing ProjectXInject dylib into app bundle..."
-	@INJECT_DYLIB="$$(find $(TROLLSTORE_DIR)/inject $(THEOS_OBJ_DIR) .theos -type f -name ProjectXInject.dylib 2>/dev/null | head -n 1)"; \
+	@INJECT_DYLIB="$$(find $(TROLLSTORE_DIR)/inject $(THEOS_OBJ_DIR) .theos -type f \( -name ProjectXInject.dylib -o -name libProjectXInject.dylib -o -name '*ProjectXInject*.dylib' \) 2>/dev/null | head -n 1)"; \
 	if [ ! -f "$$INJECT_DYLIB" ]; then \
 		echo "ProjectXInject.dylib not found after build"; \
+		echo "Searched for ProjectXInject.dylib / libProjectXInject.dylib under inject tree and app .theos output:"; \
 		find $(TROLLSTORE_DIR)/inject .theos -maxdepth 8 -print 2>/dev/null || true; \
 		exit 1; \
 	fi; \

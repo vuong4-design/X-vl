@@ -167,10 +167,10 @@ jobs:
           test -f "$APP_PATH/weaponx_root_helper"
           if [ ! -f "$APP_PATH/ProjectXInject.dylib" ]; then
             echo "ProjectXInject.dylib missing from app bundle; copying from inject build output"
-            INJECT_DYLIB="$(find trollstore/inject/.theos/obj -type f -name ProjectXInject.dylib | head -n 1)"
+            INJECT_DYLIB="$(find trollstore/inject trollstore/app/.theos -type f \( -name ProjectXInject.dylib -o -name libProjectXInject.dylib -o -name '*ProjectXInject*.dylib' \) 2>/dev/null | head -n 1)"
             if [ -z "$INJECT_DYLIB" ] || [ ! -f "$INJECT_DYLIB" ]; then
-              echo "ProjectXInject.dylib binary not found under trollstore/inject/.theos/obj"
-              find trollstore/inject/.theos -maxdepth 8 -type f -name "ProjectXInject.dylib" -print || true
+              echo "ProjectXInject dylib binary not found under trollstore/inject or trollstore/app/.theos"
+              find trollstore/inject trollstore/app/.theos -maxdepth 8 -type f -name "*ProjectXInject*.dylib" -print || true
               exit 1
             fi
             cp "$INJECT_DYLIB" "$APP_PATH/ProjectXInject.dylib"
