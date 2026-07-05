@@ -35,10 +35,9 @@ static NSString *getNSStringFromFile(int fd)
     ssize_t num_read;
     char c;
     if (!fd_is_valid(fd)) return @"";
-    while ((num_read = read(fd, &c, sizeof(c))))
+    while ((num_read = read(fd, &c, sizeof(c))) > 0)
     {
         [ms appendString:[NSString stringWithFormat:@"%c", c]];
-        if (c == '\n') break;
     }
     return ms.copy;
 }

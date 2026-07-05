@@ -315,28 +315,37 @@ static int op_dyldlaunch(NSString *executable, NSString *dylib, NSString *home, 
     int rc = posix_spawn(&pid, executable.fileSystemRepresentation, &actions, &attr, (char *const *)argv, (char *const *)envp);
     posix_spawnattr_destroy(&attr);
     posix_spawn_file_actions_destroy(&actions);
-    if (logFd >= 0) close(logFd);
     if (rc != 0) {
+        if (logFd >= 0) close(logFd);
         perr(@"dyldlaunch: posix_spawn failed executable=%@ rc=%d (%s)", executable, rc, strerror(rc));
         return 3;
     }
     printf("pid=%d\n", pid);
+    fflush(stdout);
+    if (logFd >= 0) dprintf(logFd, "spawn_pid=%d\n", pid);
     usleep(1000 * 1000);
     int status = 0;
     pid_t waitResult = waitpid(pid, &status, WNOHANG);
     if (waitResult == 0) {
         printf("child_alive_after_1s=YES\n");
+        if (logFd >= 0) dprintf(logFd, "child_alive_after_1s=YES\n");
     } else if (waitResult == pid) {
         if (WIFEXITED(status)) {
             printf("child_exited_after_1s=YES exit=%d\n", WEXITSTATUS(status));
+            if (logFd >= 0) dprintf(logFd, "child_exited_after_1s=YES exit=%d\n", WEXITSTATUS(status));
         } else if (WIFSIGNALED(status)) {
             printf("child_signaled_after_1s=YES signal=%d\n", WTERMSIG(status));
+            if (logFd >= 0) dprintf(logFd, "child_signaled_after_1s=YES signal=%d\n", WTERMSIG(status));
         } else {
             printf("child_status_after_1s=%d\n", status);
+            if (logFd >= 0) dprintf(logFd, "child_status_after_1s=%d\n", status);
         }
     } else {
         printf("waitpid_after_1s_failed=%s\n", strerror(errno));
+        if (logFd >= 0) dprintf(logFd, "waitpid_after_1s_failed=%s\n", strerror(errno));
     }
+    fflush(stdout);
+    if (logFd >= 0) close(logFd);
     return 0;
 }
 
