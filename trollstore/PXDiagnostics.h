@@ -15,6 +15,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSDictionary<NSString *, id> *)entitlementsSnapshot;
 + (NSDictionary<NSString *, id> *)rootHelperSelfTest;
 + (NSDictionary<NSString *, id> *)routerFixtureSelfTest;
++ (NSDictionary<NSString *, id> *)injectionSnapshotForBundleID:(NSString *)bundleID;
 
 @end
 

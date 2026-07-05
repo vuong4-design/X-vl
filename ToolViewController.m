@@ -513,6 +513,25 @@
     [alert addAction:[UIAlertAction actionWithTitle:@"Run Router Fixture Test" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         showResult(@"Router Fixture Test", [PXDiagnostics routerFixtureSelfTest]);
     }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Export Injection Snapshot" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        typeof(weakSelf) selfRef = weakSelf;
+        if (!selfRef) return;
+        UIAlertController *prompt = [UIAlertController alertControllerWithTitle:@"Injection Snapshot"
+                                                                        message:@"Bundle ID to export. Default is AIDA64."
+                                                                 preferredStyle:UIAlertControllerStyleAlert];
+        [prompt addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+            textField.placeholder = @"com.finalwire.aida64";
+            textField.text = @"com.finalwire.aida64";
+            textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+            textField.autocorrectionType = UITextAutocorrectionTypeNo;
+        }];
+        [prompt addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+        [prompt addAction:[UIAlertAction actionWithTitle:@"Export" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action2) {
+            NSString *bundleID = prompt.textFields.firstObject.text ?: @"com.finalwire.aida64";
+            showResult(@"Injection Snapshot", [PXDiagnostics injectionSnapshotForBundleID:bundleID]);
+        }]];
+        [selfRef presentViewController:prompt animated:YES completion:nil];
+    }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Copy Log Tail" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         [UIPasteboard generalPasteboard].string = [PXDiagnostics readLogTailWithMaxBytes:20000];
     }]];

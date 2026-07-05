@@ -165,23 +165,42 @@ jobs:
             chmod 755 "$APP_PATH/weaponx_root_helper"
           fi
           test -f "$APP_PATH/weaponx_root_helper"
+          if [ ! -f "$APP_PATH/ProjectXInject.dylib" ]; then
+            echo "ProjectXInject.dylib missing from app bundle; copying from inject build output"
+            INJECT_DYLIB="$(find trollstore/inject/.theos/obj -type f -name ProjectXInject.dylib | head -n 1)"
+            if [ -z "$INJECT_DYLIB" ] || [ ! -f "$INJECT_DYLIB" ]; then
+              echo "ProjectXInject.dylib binary not found under trollstore/inject/.theos/obj"
+              find trollstore/inject/.theos -maxdepth 8 -type f -name "ProjectXInject.dylib" -print || true
+              exit 1
+            fi
+            cp "$INJECT_DYLIB" "$APP_PATH/ProjectXInject.dylib"
+            chmod 755 "$APP_PATH/ProjectXInject.dylib"
+          fi
+          test -f "$APP_PATH/ProjectXInject.dylib"
 
           echo "Re-signing and verifying TrollStore entitlements..."
           APP_ENT="$PWD/trollstore/app/entitlements.plist"
           HELPER_ENT="$PWD/trollstore/helper/entitlements.plist"
+          INJECT_ENT="$PWD/trollstore/inject/ProjectXInject.entitlements.plist"
           test -f "$APP_ENT"
           test -f "$HELPER_ENT"
+          test -f "$INJECT_ENT"
           ldid -S"$APP_ENT" "$APP_PATH/$EXECUTABLE"
           ldid -S"$HELPER_ENT" "$APP_PATH/weaponx_root_helper"
+          ldid -S"$INJECT_ENT" "$APP_PATH/ProjectXInject.dylib"
 
           APP_ENT_DUMP="/tmp/projectxtroll-main.entitlements.plist"
           HELPER_ENT_DUMP="/tmp/projectxtroll-helper.entitlements.plist"
+          INJECT_ENT_DUMP="/tmp/projectxtroll-inject.entitlements.plist"
           ldid -e "$APP_PATH/$EXECUTABLE" > "$APP_ENT_DUMP"
           ldid -e "$APP_PATH/weaponx_root_helper" > "$HELPER_ENT_DUMP"
+          ldid -e "$APP_PATH/ProjectXInject.dylib" > "$INJECT_ENT_DUMP"
           echo "Main executable entitlements:"
           cat "$APP_ENT_DUMP"
           echo "Root helper entitlements:"
           cat "$HELPER_ENT_DUMP"
+          echo "ProjectXInject entitlements:"
+          cat "$INJECT_ENT_DUMP"
 
           require_entitlement() {
             local plist="$1"
@@ -202,6 +221,9 @@ jobs:
           require_entitlement "$HELPER_ENT_DUMP" "com.apple.private.persona-mgmt"
           require_entitlement "$HELPER_ENT_DUMP" "com.apple.private.security.no-sandbox"
           require_entitlement "$HELPER_ENT_DUMP" "com.apple.private.security.no-container"
+          require_entitlement "$INJECT_ENT_DUMP" "platform-application"
+          require_entitlement "$INJECT_ENT_DUMP" "com.apple.private.security.no-sandbox"
+          require_entitlement "$INJECT_ENT_DUMP" "com.apple.private.security.no-container"
 
           rm -rf trollstore/app/tipa
           mkdir -p trollstore/app/tipa/Payload
@@ -219,6 +241,7 @@ jobs:
             trollstore/app/packages/**
             trollstore/app/.theos/obj/**
             trollstore/helper/.theos/obj/**
+            trollstore/inject/.theos/obj/**
           if-no-files-found: ignore
 
       - name: Upload ProjectXTroll tipa

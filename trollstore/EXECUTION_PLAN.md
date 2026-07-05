@@ -16,6 +16,7 @@
 | Mục tiêu build | Tách target TrollStore riêng — **Makefile riêng** tại `trollstore/app/Makefile` |
 | Archive (G4.2) | TrollStore dùng `PXArchive` in-process; rootful vẫn dùng tar |
 | Entitlements | Target TrollStore dùng `trollstore/app/entitlements.plist`; helper dùng `trollstore/helper/entitlements.plist`; CI re-sign + verify trước khi zip `.tipa` |
+| Injection | Batch 1 thêm `ProjectXInject.dylib` substrate-free, runtime snapshot, loaded marker; DYLD/patcher backend triển khai sau |
 | G2 phân lô | 3 PR (PR-R1 → PR-R2 → PR-R3) |
 | UI | Không đụng cho tới G6.3 |
 | Dọn jailbreak | Để G6 |
@@ -192,8 +193,9 @@ Phụ thuộc `TSUtil` thật.
   `/var/mobile/Library/ProjectXTroll/diagnostic.log`, menu tạm `Diag` trong
   `ToolViewController`, self-test environment/root-helper/router, instrumentation
   cho `PXShellRouter`, `PXRootHelper`, entitlement snapshot/check, backup start/tar
-  failure và warning rõ rằng runtime hooks của `ProjectXTweak` không hoạt động
-  trong TrollStore-only app.
+  failure, runtime snapshot/loaded marker check cho `ProjectXInject.dylib`, và
+  warning rõ rằng runtime hooks của `ProjectXTweak` không hoạt động trong
+  TrollStore-only app.
 - **G6.4** smoke test 8 scenario × 2 device.
 - **G6.5** đồng bộ tài liệu: cập nhật `HANDOFF.md` (đang lệch) + `MIGRATION_PLAN.md`
   + thêm `ROUTER_REFERENCE.md`.

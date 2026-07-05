@@ -3,6 +3,7 @@
 #import "PXDiagnostics.h"
 #import "PXEntitlements.h"
 #import "PXRootHelper.h"
+#import "PXRuntimeSnapshot.h"
 #import "PXShellRouter.h"
 
 #import <UIKit/UIKit.h>
@@ -219,6 +220,19 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
         [self log:@"[router-test] %@", row];
     }
     return @{@"results": results};
+}
+
++ (NSDictionary<NSString *,id> *)injectionSnapshotForBundleID:(NSString *)bundleID {
+    NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
+    [self log:@"[inject] starting injection snapshot bundleID=%@", targetBundleID];
+    NSError *err = nil;
+    NSDictionary *snapshot = [PXRuntimeSnapshot exportSnapshotForBundleID:targetBundleID error:&err];
+    NSDictionary *status = [PXRuntimeSnapshot statusForBundleID:targetBundleID];
+    NSMutableDictionary *info = [NSMutableDictionary dictionaryWithDictionary:status ?: @{}];
+    info[@"exportOK"] = snapshot ? @"YES" : @"NO";
+    info[@"exportError"] = err.localizedDescription ?: @"";
+    [self log:@"[inject] snapshot status=%@", info];
+    return info;
 }
 
 @end
