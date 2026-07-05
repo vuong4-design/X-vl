@@ -97,6 +97,21 @@ static void perr(NSString *fmt, ...) {
     fputc('\n', stderr);
 }
 
+static void appendLogLine(NSString *path, NSString *fmt, ...) NS_FORMAT_FUNCTION(2,3);
+static void appendLogLine(NSString *path, NSString *fmt, ...) {
+    if (!path.length) return;
+    va_list ap;
+    va_start(ap, fmt);
+    NSString *s = [[NSString alloc] initWithFormat:fmt arguments:ap];
+    va_end(ap);
+    int fd = open(path.fileSystemRepresentation, O_CREAT | O_WRONLY | O_APPEND, 0644);
+    if (fd < 0) return;
+    NSString *line = [s stringByAppendingString:@"\n"];
+    write(fd, line.UTF8String, strlen(line.UTF8String));
+    fsync(fd);
+    close(fd);
+}
+
 static BOOL pathIsAllowed(NSString *path) {
     if (path.length == 0) return NO;
     if (![path isAbsolutePath]) return NO;
@@ -279,6 +294,7 @@ static int op_dyldlaunch(NSString *executable, NSString *dylib, NSString *home, 
     NSString *flagEnv = @"PROJECTX_DYLD_LAUNCH=1";
     NSString *printLibs = @"DYLD_PRINT_LIBRARIES=1";
     NSString *printInit = @"DYLD_PRINT_INITIALIZERS=1";
+    NSString *printFile = logPath.length ? [@"DYLD_PRINT_TO_FILE=" stringByAppendingString:logPath] : @"DYLD_PRINT_TO_FILE=/tmp/projectx-dyldlaunch.log";
     const char *envp[] = {
         dyld.UTF8String,
         homeEnv.UTF8String,
@@ -288,6 +304,7 @@ static int op_dyldlaunch(NSString *executable, NSString *dylib, NSString *home, 
         flagEnv.UTF8String,
         printLibs.UTF8String,
         printInit.UTF8String,
+        printFile.UTF8String,
         NULL
     };
 
@@ -298,7 +315,8 @@ static int op_dyldlaunch(NSString *executable, NSString *dylib, NSString *home, 
         unlink(logPath.fileSystemRepresentation);
         logFd = open(logPath.fileSystemRepresentation, O_CREAT | O_WRONLY | O_TRUNC, 0644);
         if (logFd >= 0) {
-            dprintf(logFd, "ProjectX dyldlaunch\nexecutable=%s\ndylib=%s\nhome=%s\nbundleID=%s\n", executable.UTF8String, dylib.UTF8String, home.UTF8String, bundleID.UTF8String);
+            dprintf(logFd, "ProjectX dyldlaunch\nexecutable=%s\ndylib=%s\nhome=%s\nbundleID=%s\nDYLD_INSERT_LIBRARIES=%s\nDYLD_PRINT_TO_FILE=%s\n", executable.UTF8String, dylib.UTF8String, home.UTF8String, bundleID.UTF8String, dylib.UTF8String, logPath.UTF8String);
+            fsync(logFd);
             posix_spawn_file_actions_adddup2(&actions, logFd, STDOUT_FILENO);
             posix_spawn_file_actions_adddup2(&actions, logFd, STDERR_FILENO);
             posix_spawn_file_actions_addclose(&actions, logFd);
@@ -316,36 +334,37 @@ static int op_dyldlaunch(NSString *executable, NSString *dylib, NSString *home, 
     posix_spawnattr_destroy(&attr);
     posix_spawn_file_actions_destroy(&actions);
     if (rc != 0) {
+        appendLogLine(logPath, @"posix_spawn_failed rc=%d errno=%d message=%s", rc, errno, strerror(rc));
         if (logFd >= 0) close(logFd);
         perr(@"dyldlaunch: posix_spawn failed executable=%@ rc=%d (%s)", executable, rc, strerror(rc));
         return 3;
     }
+    if (logFd >= 0) close(logFd);
     printf("pid=%d\n", pid);
     fflush(stdout);
-    if (logFd >= 0) dprintf(logFd, "spawn_pid=%d\n", pid);
+    appendLogLine(logPath, @"spawn_success pid=%d", pid);
     usleep(1000 * 1000);
     int status = 0;
     pid_t waitResult = waitpid(pid, &status, WNOHANG);
     if (waitResult == 0) {
         printf("child_alive_after_1s=YES\n");
-        if (logFd >= 0) dprintf(logFd, "child_alive_after_1s=YES\n");
+        appendLogLine(logPath, @"child_alive_after_1s=YES");
     } else if (waitResult == pid) {
         if (WIFEXITED(status)) {
             printf("child_exited_after_1s=YES exit=%d\n", WEXITSTATUS(status));
-            if (logFd >= 0) dprintf(logFd, "child_exited_after_1s=YES exit=%d\n", WEXITSTATUS(status));
+            appendLogLine(logPath, @"child_exited_after_1s=YES exit=%d", WEXITSTATUS(status));
         } else if (WIFSIGNALED(status)) {
             printf("child_signaled_after_1s=YES signal=%d\n", WTERMSIG(status));
-            if (logFd >= 0) dprintf(logFd, "child_signaled_after_1s=YES signal=%d\n", WTERMSIG(status));
+            appendLogLine(logPath, @"child_signaled_after_1s=YES signal=%d", WTERMSIG(status));
         } else {
             printf("child_status_after_1s=%d\n", status);
-            if (logFd >= 0) dprintf(logFd, "child_status_after_1s=%d\n", status);
+            appendLogLine(logPath, @"child_status_after_1s=%d", status);
         }
     } else {
         printf("waitpid_after_1s_failed=%s\n", strerror(errno));
-        if (logFd >= 0) dprintf(logFd, "waitpid_after_1s_failed=%s\n", strerror(errno));
+        appendLogLine(logPath, @"waitpid_after_1s_failed=%s", strerror(errno));
     }
     fflush(stdout);
-    if (logFd >= 0) close(logFd);
     return 0;
 }
 
