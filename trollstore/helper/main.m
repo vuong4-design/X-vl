@@ -14,6 +14,8 @@
 //   weaponx_root_helper mv      <src-absolute-path> <dst-absolute-path>
 //   weaponx_root_helper mkdir   <absolute-path>
 //   weaponx_root_helper cpfile  <src-absolute-path> <dst-absolute-path>
+//   weaponx_root_helper ldidprobe
+//   weaponx_root_helper ldidsign <binary-absolute-path> [entitlements-plist]
 //   weaponx_root_helper dyldlaunch <executable> <dylib> <home> <bundleID> [logPath]
 //
 // Exit codes:
@@ -42,6 +44,7 @@
 extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t* __restrict, uid_t, uint32_t);
 extern int posix_spawnattr_set_persona_uid_np(const posix_spawnattr_t* __restrict, uid_t);
 extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t* __restrict, uid_t);
+extern char **environ;
 
 // Allowlisted path prefixes. Keep narrow; each new prefix needs justification.
 static const char *kAllowedPrefixes[] = {
@@ -341,6 +344,67 @@ static int op_cpfile(NSString *src, NSString *dst) {
     return 0;
 }
 
+static NSString *find_ldid(void) {
+    NSArray<NSString *> *candidates = @[
+        @"/usr/bin/ldid",
+        @"/var/jb/usr/bin/ldid",
+        @"/private/preboot/jb/usr/bin/ldid",
+        @"/bin/ldid"
+    ];
+    for (NSString *path in candidates) {
+        if (access(path.fileSystemRepresentation, X_OK) == 0) return path;
+    }
+    return nil;
+}
+
+static int op_ldidprobe(void) {
+    NSString *ldid = find_ldid();
+    if (!ldid.length) {
+        perr(@"ldid not found");
+        return 3;
+    }
+    printf("%s\n", ldid.UTF8String);
+    return 0;
+}
+
+static int op_ldidsign(NSString *binaryPath, NSString *entitlementsPath) {
+    if (!pathIsAllowed(binaryPath)) { perr(@"ldidsign: binary path not allowed: %@", binaryPath); return 2; }
+    if (entitlementsPath.length && !pathIsAllowed(entitlementsPath)) { perr(@"ldidsign: entitlements path not allowed: %@", entitlementsPath); return 2; }
+    NSString *ldid = find_ldid();
+    if (!ldid.length) {
+        perr(@"ldidsign: ldid not found");
+        return 3;
+    }
+    if (access(binaryPath.fileSystemRepresentation, W_OK) != 0) {
+        perr(@"ldidsign: binary not writable: %@ (%s)", binaryPath, strerror(errno));
+        return 3;
+    }
+    if (entitlementsPath.length && access(entitlementsPath.fileSystemRepresentation, R_OK) != 0) {
+        perr(@"ldidsign: entitlements not readable: %@ (%s)", entitlementsPath, strerror(errno));
+        return 3;
+    }
+
+    pid_t pid = 0;
+    NSString *signArg = entitlementsPath.length ? [@"-S" stringByAppendingString:entitlementsPath] : @"-S";
+    const char *argv[] = { ldid.fileSystemRepresentation, signArg.fileSystemRepresentation, binaryPath.fileSystemRepresentation, NULL };
+    int rc = posix_spawn(&pid, ldid.fileSystemRepresentation, NULL, NULL, (char *const *)argv, (char *const *)environ);
+    if (rc != 0) {
+        perr(@"ldidsign: posix_spawn failed: %s", strerror(rc));
+        return 3;
+    }
+    int status = 0;
+    if (waitpid(pid, &status, 0) != pid) {
+        perr(@"ldidsign: waitpid failed: %s", strerror(errno));
+        return 3;
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        perr(@"ldidsign: ldid failed status=%d", status);
+        return 3;
+    }
+    printf("signed=%s\nldid=%s\nentitlements=%s\n", binaryPath.UTF8String, ldid.UTF8String, entitlementsPath.length ? entitlementsPath.UTF8String : "");
+    return 0;
+}
+
 static int op_dyldlaunch(NSString *executable, NSString *dylib, NSString *home, NSString *bundleID, NSString *logPath) {
     if (!pathIsAllowed(executable)) { perr(@"dyldlaunch: executable not allowed: %@", executable); return 2; }
     if (!pathIsAllowed(dylib)) { perr(@"dyldlaunch: dylib not allowed: %@", dylib); return 2; }
@@ -477,6 +541,15 @@ int main(int argc, char *argv[]) {
         if ([op isEqualToString:@"cpfile"]) {
             if (argc != 4) { perr(@"cpfile: expects <src> <dst>"); return 2; }
             return op_cpfile(@(argv[2]), @(argv[3]));
+        }
+        if ([op isEqualToString:@"ldidprobe"]) {
+            if (argc != 2) { perr(@"ldidprobe: expects no args"); return 2; }
+            return op_ldidprobe();
+        }
+        if ([op isEqualToString:@"ldidsign"]) {
+            if (argc != 3 && argc != 4) { perr(@"ldidsign: expects <binary-path> [entitlements-plist]"); return 2; }
+            NSString *entitlementsPath = argc == 4 ? @(argv[3]) : nil;
+            return op_ldidsign(@(argv[2]), entitlementsPath);
         }
         if ([op isEqualToString:@"dyldlaunch"]) {
             if (argc != 6 && argc != 7) { perr(@"dyldlaunch: expects <executable> <dylib> <home> <bundleID> [logPath]"); return 2; }

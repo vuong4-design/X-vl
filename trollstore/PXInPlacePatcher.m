@@ -2,6 +2,7 @@
 
 #import "PXInPlacePatcher.h"
 #import "PXDiagnostics.h"
+#import "PXEntitlements.h"
 #import "PXMachOInjector.h"
 #import "PXRootHelper.h"
 #import "PXRuntimeSnapshot.h"
@@ -36,6 +37,51 @@ static NSString *PXIPFileFingerprint(NSString *path) {
     NSDate *mtime = attrs[NSFileModificationDate];
     NSTimeInterval ts = mtime ? [mtime timeIntervalSince1970] : 0;
     return [NSString stringWithFormat:@"size:%@ mtime:%.0f", size, ts];
+}
+
+static NSString *PXIPFilePermissions(NSString *path) {
+    NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
+    NSNumber *perms = attrs[NSFilePosixPermissions];
+    return perms ? [NSString stringWithFormat:@"%04o", perms.unsignedShortValue & 07777] : @"";
+}
+
+static void PXIPAddLoadCommandStatus(NSMutableDictionary *result, NSString *keyPrefix, NSString *path, NSString *dylibLoadPath) {
+    BOOL exists = path.length && [[NSFileManager defaultManager] fileExistsAtPath:path];
+    result[[keyPrefix stringByAppendingString:@"Exists"]] = exists ? @"YES" : @"NO";
+    result[[keyPrefix stringByAppendingString:@"Path"]] = path ?: @"";
+    result[[keyPrefix stringByAppendingString:@"Fingerprint"]] = exists ? (PXIPFileFingerprint(path) ?: @"") : @"";
+    result[[keyPrefix stringByAppendingString:@"Permissions"]] = exists ? PXIPFilePermissions(path) : @"";
+    if (!exists || !dylibLoadPath.length) {
+        result[[keyPrefix stringByAppendingString:@"HasLoadCommand"]] = @"NO";
+        result[[keyPrefix stringByAppendingString:@"LoadCommandError"]] = exists ? @"Missing dylib load path" : @"File missing";
+        return;
+    }
+    NSError *err = nil;
+    BOOL has = [PXMachOInjector hasDylibLoadCommand:dylibLoadPath inMachOAtPath:path error:&err];
+    result[[keyPrefix stringByAppendingString:@"HasLoadCommand"]] = has ? @"YES" : @"NO";
+    result[[keyPrefix stringByAppendingString:@"LoadCommandError"]] = has ? @"" : (err.localizedDescription ?: @"");
+
+    NSError *sigErr = nil;
+    NSDictionary *sig = [PXMachOInjector codeSignatureSummaryForMachOAtPath:path error:&sigErr];
+    result[[keyPrefix stringByAppendingString:@"CodeSignature"]] = sig ?: @{};
+    result[[keyPrefix stringByAppendingString:@"CodeSignatureError"]] = sigErr.localizedDescription ?: @"";
+}
+
+static void PXIPAddCodeSignatureOnlyStatus(NSMutableDictionary *result, NSString *keyPrefix, NSString *path) {
+    BOOL exists = path.length && [[NSFileManager defaultManager] fileExistsAtPath:path];
+    result[[keyPrefix stringByAppendingString:@"Exists"]] = exists ? @"YES" : @"NO";
+    result[[keyPrefix stringByAppendingString:@"Path"]] = path ?: @"";
+    result[[keyPrefix stringByAppendingString:@"Fingerprint"]] = exists ? (PXIPFileFingerprint(path) ?: @"") : @"";
+    result[[keyPrefix stringByAppendingString:@"Permissions"]] = exists ? PXIPFilePermissions(path) : @"";
+    if (!exists) {
+        result[[keyPrefix stringByAppendingString:@"CodeSignature"]] = @{};
+        result[[keyPrefix stringByAppendingString:@"CodeSignatureError"]] = @"File missing";
+        return;
+    }
+    NSError *sigErr = nil;
+    NSDictionary *sig = [PXMachOInjector codeSignatureSummaryForMachOAtPath:path error:&sigErr];
+    result[[keyPrefix stringByAppendingString:@"CodeSignature"]] = sig ?: @{};
+    result[[keyPrefix stringByAppendingString:@"CodeSignatureError"]] = sigErr.localizedDescription ?: @"";
 }
 
 static id PXIPProxy(NSString *bundleID) {
@@ -137,6 +183,45 @@ static BOOL PXIPRunRoot(NSArray<NSString *> *argv, NSString **outError) {
     return ok;
 }
 
+static NSDictionary<NSString *, id> *PXIPRunRootDetailed(NSArray<NSString *> *argv) {
+    int exitCode = -999;
+    NSString *stdOut = nil;
+    NSString *stdErr = nil;
+    NSError *err = nil;
+    BOOL ok = [[PXRootHelper sharedHelper] runAsRoot:argv exitCode:&exitCode stdOut:&stdOut stdErr:&stdErr error:&err];
+    return @{
+        @"ok": ok ? @"YES" : @"NO",
+        @"exitCode": @(exitCode),
+        @"stdout": stdOut ?: @"",
+        @"stderr": stdErr ?: @"",
+        @"error": err.localizedDescription ?: @"",
+    };
+}
+
+static NSDictionary<NSString *, id> *PXIPTrySignPath(NSString *path, NSString *entitlementsPath) {
+    if (!path.length) return @{@"ok": @"NO", @"error": @"Missing path"};
+    NSDictionary *probe = PXIPRunRootDetailed(@[@"ldidprobe"]);
+    if (![probe[@"ok"] isEqual:@"YES"]) {
+        return @{
+            @"ok": @"NO",
+            @"status": @"ldid-unavailable",
+            @"probe": probe ?: @{},
+        };
+    }
+    NSMutableArray<NSString *> *argv = [NSMutableArray arrayWithObjects:@"ldidsign", path, nil];
+    if (entitlementsPath.length && [[NSFileManager defaultManager] fileExistsAtPath:entitlementsPath]) {
+        [argv addObject:entitlementsPath];
+    }
+    NSDictionary *sign = PXIPRunRootDetailed(argv);
+    return @{
+        @"ok": [sign[@"ok"] isEqual:@"YES"] ? @"YES" : @"NO",
+        @"status": [sign[@"ok"] isEqual:@"YES"] ? @"ldid-signed" : @"ldid-failed",
+        @"entitlementsPath": entitlementsPath ?: @"",
+        @"probe": probe ?: @{},
+        @"sign": sign ?: @{},
+    };
+}
+
 @implementation PXInPlacePatcher
 
 + (NSDictionary<NSString *,id> *)prepareBundleID:(NSString *)bundleID {
@@ -175,6 +260,7 @@ static BOOL PXIPRunRoot(NSArray<NSString *> *argv, NSString **outError) {
     NSString *backupDir = [[PXIPBackupRoot() stringByAppendingPathComponent:PXIPSafeName(bundleID)] stringByAppendingPathComponent:safeVersion];
     NSString *backupExecutable = [backupDir stringByAppendingPathComponent:[executablePath lastPathComponent]];
     NSString *backupMetadata = [backupDir stringByAppendingPathComponent:@"metadata.plist"];
+    NSString *entitlementsPath = [backupDir stringByAppendingPathComponent:@"original_entitlements.plist"];
     NSString *originalHash = PXIPFileFingerprint(executablePath);
     [PXDiagnostics log:@"[patch] prepare fingerprint=%@", originalHash ?: @""];
     NSError *mkErr = nil;
@@ -197,6 +283,14 @@ static BOOL PXIPRunRoot(NSArray<NSString *> *argv, NSString **outError) {
     } else {
         [PXDiagnostics log:@"[patch] prepare backup already exists=%@", backupExecutable ?: @""];
     }
+
+    NSError *entErr = nil;
+    NSData *entData = [PXEntitlements entitlementsDataForBinaryAtPath:backupExecutable error:&entErr];
+    BOOL entWriteOK = entData.length ? [entData writeToFile:entitlementsPath atomically:YES] : NO;
+    result[@"originalEntitlementsPath"] = entWriteOK ? entitlementsPath : @"";
+    result[@"originalEntitlementsOK"] = entWriteOK ? @"YES" : @"NO";
+    result[@"originalEntitlementsError"] = entWriteOK ? @"" : (entErr.localizedDescription ?: @"No entitlements data");
+    [PXDiagnostics log:@"[patch] prepare entitlements ok=%@ path=%@ error=%@", result[@"originalEntitlementsOK"], result[@"originalEntitlementsPath"], result[@"originalEntitlementsError"]];
 
     [PXDiagnostics log:@"[patch] prepare create frameworksPath=%@", frameworksPath ?: @""];
     NSString *rootErr = nil;
@@ -221,6 +315,7 @@ static BOOL PXIPRunRoot(NSArray<NSString *> *argv, NSString **outError) {
     state[@"backupExecutable"] = backupExecutable ?: @"";
     state[@"targetDylib"] = targetDylib ?: @"";
     state[@"originalExecutableHash"] = originalHash ?: @"";
+    state[@"originalEntitlementsPath"] = entWriteOK ? entitlementsPath : @"";
     state[@"loadCommandInserted"] = @"NO";
     state[@"dylibLoadPath"] = @"@executable_path/Frameworks/ProjectXInject.dylib";
     [PXDiagnostics log:@"[patch] prepare writing backup metadata=%@", backupMetadata ?: @""];
@@ -276,10 +371,12 @@ static BOOL PXIPRunRoot(NSArray<NSString *> *argv, NSString **outError) {
         result[@"error"] = patched ? @"" : (patchErr.localizedDescription ?: @"Mach-O patch failed");
         result[@"patchedCopy"] = patchedCopy ?: @"";
         result[@"dylibLoadPath"] = dylibLoadPath ?: @"";
+        PXIPAddLoadCommandStatus(result, @"patchedCopy", patchedCopy, dylibLoadPath);
         if (patched) {
             NSMutableDictionary *newState = [NSMutableDictionary dictionaryWithDictionary:state ?: @{}];
             newState[@"patchedCopy"] = patchedCopy ?: @"";
             newState[@"patchedCopyReady"] = @"YES";
+            newState[@"patchedCopyHasLoadCommand"] = result[@"patchedCopyHasLoadCommand"] ?: @"NO";
             newState[@"patchedCopyPreparedAt"] = @([[NSDate date] timeIntervalSince1970]);
             PXIPWriteState(bundleID, newState);
         }
@@ -303,6 +400,8 @@ static BOOL PXIPRunRoot(NSArray<NSString *> *argv, NSString **outError) {
         NSString *patchedCopy = state[@"patchedCopy"];
         NSString *executablePath = state[@"executablePath"];
         NSString *executableName = state[@"executableName"];
+        NSString *dylibLoadPath = state[@"dylibLoadPath"] ?: @"@executable_path/Frameworks/ProjectXInject.dylib";
+        NSString *entitlementsPath = state[@"originalEntitlementsPath"];
         if (!patchedCopy.length || ![[NSFileManager defaultManager] fileExistsAtPath:patchedCopy]) {
             result[@"ok"] = @"NO";
             result[@"error"] = @"No patched copy found. Run Patch Prepared Copy first.";
@@ -328,11 +427,22 @@ static BOOL PXIPRunRoot(NSArray<NSString *> *argv, NSString **outError) {
             return result;
         }
 
+        PXIPAddLoadCommandStatus(result, @"patchedCopy", patchedCopy, dylibLoadPath);
+        PXIPAddLoadCommandStatus(result, @"installedExecutable", executablePath, dylibLoadPath);
+
+        NSDictionary *signExecutable = PXIPTrySignPath(executablePath, entitlementsPath);
+        result[@"signExecutable"] = signExecutable ?: @{};
+        if ([signExecutable[@"ok"] isEqual:@"YES"]) {
+            PXIPAddLoadCommandStatus(result, @"installedExecutableAfterSign", executablePath, dylibLoadPath);
+        }
+
         NSMutableDictionary *newState = [NSMutableDictionary dictionaryWithDictionary:state ?: @{}];
-        newState[@"mode"] = @"inplace-installed-unsigned";
+        newState[@"mode"] = [signExecutable[@"ok"] isEqual:@"YES"] ? @"inplace-installed-signed" : @"inplace-installed-unsigned";
         newState[@"installedPatchedCopy"] = @"YES";
+        newState[@"installedExecutableHasLoadCommand"] = result[@"installedExecutableHasLoadCommand"] ?: @"NO";
+        newState[@"installedExecutableFingerprint"] = result[@"installedExecutableFingerprint"] ?: @"";
+        newState[@"signatureStatus"] = signExecutable[@"status"] ?: @"not-resigned";
         newState[@"installedAt"] = @([[NSDate date] timeIntervalSince1970]);
-        newState[@"signatureStatus"] = @"not-resigned";
         PXIPWriteState(bundleID, newState);
 
         NSDictionary *runtimeStatus = [PXRuntimeSnapshot statusForBundleID:bundleID];
@@ -417,8 +527,17 @@ static BOOL PXIPRunRoot(NSArray<NSString *> *argv, NSString **outError) {
     result[@"state"] = state ?: @{};
     NSString *targetDylib = state[@"targetDylib"];
     result[@"targetDylibExists"] = (targetDylib.length && [fm fileExistsAtPath:targetDylib]) ? @"YES" : @"NO";
+    result[@"targetDylibPath"] = targetDylib ?: @"";
+    result[@"targetDylibFingerprint"] = (targetDylib.length && [fm fileExistsAtPath:targetDylib]) ? (PXIPFileFingerprint(targetDylib) ?: @"") : @"";
+    result[@"targetDylibPermissions"] = (targetDylib.length && [fm fileExistsAtPath:targetDylib]) ? PXIPFilePermissions(targetDylib) : @"";
+    PXIPAddCodeSignatureOnlyStatus(result, @"targetDylib", targetDylib);
     NSString *patchedCopy = state[@"patchedCopy"];
     result[@"patchedCopyExists"] = (patchedCopy.length && [fm fileExistsAtPath:patchedCopy]) ? @"YES" : @"NO";
+    NSString *dylibLoadPath = state[@"dylibLoadPath"] ?: @"@executable_path/Frameworks/ProjectXInject.dylib";
+    PXIPAddLoadCommandStatus(result, @"patchedCopy", patchedCopy, dylibLoadPath);
+    NSString *executablePath = result[@"executablePath"];
+    if (![executablePath isKindOfClass:[NSString class]] || !executablePath.length) executablePath = state[@"executablePath"];
+    PXIPAddLoadCommandStatus(result, @"installedExecutable", executablePath, dylibLoadPath);
     return result;
 }
 

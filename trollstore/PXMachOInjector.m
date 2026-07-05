@@ -130,6 +130,101 @@ static BOOL PXMIInsertIntoSlice(NSMutableData *data, uint64_t offset, uint64_t s
     return NO;
 }
 
+static BOOL PXMIHasDylibCommandInSlice(NSData *data, uint64_t offset, NSString *dylibPath, BOOL *checked, NSError **error) {
+    if (!PXRangeOK(data.length, offset, sizeof(uint32_t))) {
+        if (error) *error = PXMIError(40, @"Slice out of range");
+        return NO;
+    }
+    uint8_t *base = (uint8_t *)data.bytes;
+    uint32_t magic = *(uint32_t *)(base + offset);
+    if (magic == MH_MAGIC_64 || magic == MH_CIGAM_64) {
+        if (checked) *checked = YES;
+        return PXMIHasDylibCommand(base, data.length, offset, magic == MH_CIGAM_64, dylibPath, error);
+    }
+    return NO;
+}
+
+static NSDictionary<NSString *, id> *PXMICodeSignatureSummaryForSlice(NSData *data, uint64_t offset, uint64_t sliceSize, NSError **error) {
+    if (!PXRangeOK(data.length, offset, sizeof(uint32_t))) {
+        if (error) *error = PXMIError(60, @"Slice out of range");
+        return nil;
+    }
+    uint8_t *base = (uint8_t *)data.bytes;
+    uint32_t magic = *(uint32_t *)(base + offset);
+    BOOL is64 = NO;
+    BOOL swap = NO;
+    if (magic == MH_MAGIC_64 || magic == MH_CIGAM_64) {
+        is64 = YES;
+        swap = (magic == MH_CIGAM_64);
+    } else if (magic == MH_MAGIC || magic == MH_CIGAM) {
+        is64 = NO;
+        swap = (magic == MH_CIGAM);
+    } else {
+        return @{@"supported": @"NO", @"error": [NSString stringWithFormat:@"Unsupported Mach-O slice magic=0x%x", magic]};
+    }
+
+    uint64_t headerSize = is64 ? sizeof(struct mach_header_64) : sizeof(struct mach_header);
+    if (!PXRangeOK(data.length, offset, headerSize)) {
+        if (error) *error = PXMIError(61, @"Mach-O header out of range");
+        return nil;
+    }
+
+    uint32_t ncmds = 0;
+    uint32_t sizeofcmds = 0;
+    if (is64) {
+        struct mach_header_64 *mh = (struct mach_header_64 *)(base + offset);
+        ncmds = PXSwap32(mh->ncmds, swap);
+        sizeofcmds = PXSwap32(mh->sizeofcmds, swap);
+    } else {
+        struct mach_header *mh = (struct mach_header *)(base + offset);
+        ncmds = PXSwap32(mh->ncmds, swap);
+        sizeofcmds = PXSwap32(mh->sizeofcmds, swap);
+    }
+
+    uint64_t commandsOffset = offset + headerSize;
+    if (!PXRangeOK(data.length, commandsOffset, sizeofcmds)) {
+        if (error) *error = PXMIError(62, @"Load commands out of range");
+        return nil;
+    }
+
+    NSMutableDictionary *summary = [@{
+        @"supported": @"YES",
+        @"is64": is64 ? @"YES" : @"NO",
+        @"sliceOffset": @(offset),
+        @"sliceSize": @(sliceSize),
+        @"ncmds": @(ncmds),
+        @"sizeofcmds": @(sizeofcmds),
+        @"hasCodeSignature": @"NO",
+    } mutableCopy];
+
+    uint64_t cursor = commandsOffset;
+    for (uint32_t i = 0; i < ncmds; i++) {
+        if (!PXRangeOK(data.length, cursor, sizeof(struct load_command))) break;
+        struct load_command *lc = (struct load_command *)(base + cursor);
+        uint32_t cmd = PXSwap32(lc->cmd, swap);
+        uint32_t cmdsize = PXSwap32(lc->cmdsize, swap);
+        if (cmdsize < sizeof(struct load_command) || !PXRangeOK(data.length, cursor, cmdsize)) break;
+        if (cmd == LC_CODE_SIGNATURE) {
+            if (cmdsize >= sizeof(struct linkedit_data_command)) {
+                struct linkedit_data_command *cs = (struct linkedit_data_command *)lc;
+                uint32_t dataoff = PXSwap32(cs->dataoff, swap);
+                uint32_t datasize = PXSwap32(cs->datasize, swap);
+                uint64_t end = (uint64_t)dataoff + datasize;
+                summary[@"hasCodeSignature"] = @"YES";
+                summary[@"codeSignatureDataOffset"] = @(dataoff);
+                summary[@"codeSignatureDataSize"] = @(datasize);
+                summary[@"codeSignatureEnd"] = @(end);
+                summary[@"codeSignatureRangeOK"] = PXRangeOK(data.length, offset + dataoff, datasize) ? @"YES" : @"NO";
+                summary[@"codeSignatureAtSliceEnd"] = (sliceSize > 0 && end == sliceSize) ? @"YES" : @"NO";
+                summary[@"headerMutationInvalidatesSignature"] = @"LIKELY";
+            }
+            break;
+        }
+        cursor += cmdsize;
+    }
+    return summary;
+}
+
 @implementation PXMachOInjector
 
 + (BOOL)insertDylibLoadCommand:(NSString *)dylibLoadPath
@@ -176,6 +271,114 @@ static BOOL PXMIInsertIntoSlice(NSMutableData *data, uint64_t offset, uint64_t s
         return NO;
     }
     return YES;
+}
+
++ (BOOL)hasDylibLoadCommand:(NSString *)dylibLoadPath
+              inMachOAtPath:(NSString *)path
+                       error:(NSError **)error {
+    if (!dylibLoadPath.length || !path.length) {
+        if (error) *error = PXMIError(50, @"Missing dylib path or Mach-O path");
+        return NO;
+    }
+    NSData *data = [NSData dataWithContentsOfFile:path];
+    if (!data.length) {
+        if (error) *error = PXMIError(51, @"Failed to read Mach-O: %@", path);
+        return NO;
+    }
+    if (!PXRangeOK(data.length, 0, sizeof(uint32_t))) {
+        if (error) *error = PXMIError(52, @"Mach-O too small: %@", path);
+        return NO;
+    }
+    uint8_t *base = (uint8_t *)data.bytes;
+    uint32_t magic = *(uint32_t *)base;
+    BOOL checkedAny = NO;
+    if (magic == FAT_MAGIC || magic == FAT_CIGAM) {
+        BOOL swap = (magic == FAT_CIGAM);
+        struct fat_header *fh = (struct fat_header *)base;
+        uint32_t nfat = PXSwap32(fh->nfat_arch, swap);
+        if (!PXRangeOK(data.length, sizeof(struct fat_header), (uint64_t)nfat * sizeof(struct fat_arch))) {
+            if (error) *error = PXMIError(53, @"Malformed fat header");
+            return NO;
+        }
+        struct fat_arch *arch = (struct fat_arch *)(base + sizeof(struct fat_header));
+        for (uint32_t i = 0; i < nfat; i++) {
+            uint32_t off = PXSwap32(arch[i].offset, swap);
+            BOOL checked = NO;
+            NSError *sliceErr = nil;
+            if (PXMIHasDylibCommandInSlice(data, off, dylibLoadPath, &checked, &sliceErr)) return YES;
+            if (sliceErr) {
+                if (error) *error = sliceErr;
+                return NO;
+            }
+            checkedAny = checkedAny || checked;
+        }
+    } else {
+        NSError *sliceErr = nil;
+        if (PXMIHasDylibCommandInSlice(data, 0, dylibLoadPath, &checkedAny, &sliceErr)) return YES;
+        if (sliceErr) {
+            if (error) *error = sliceErr;
+            return NO;
+        }
+    }
+    if (!checkedAny && error) *error = PXMIError(54, @"No supported 64-bit Mach-O slice found");
+    return NO;
+}
+
++ (nullable NSDictionary<NSString *, id> *)codeSignatureSummaryForMachOAtPath:(NSString *)path
+                                                                         error:(NSError **)error {
+    if (!path.length) {
+        if (error) *error = PXMIError(70, @"Missing Mach-O path");
+        return nil;
+    }
+    NSData *data = [NSData dataWithContentsOfFile:path];
+    if (!data.length) {
+        if (error) *error = PXMIError(71, @"Failed to read Mach-O: %@", path);
+        return nil;
+    }
+    if (!PXRangeOK(data.length, 0, sizeof(uint32_t))) {
+        if (error) *error = PXMIError(72, @"Mach-O too small: %@", path);
+        return nil;
+    }
+
+    NSMutableDictionary *summary = [@{
+        @"path": path ?: @"",
+        @"fileSize": @(data.length),
+        @"isFat": @"NO",
+    } mutableCopy];
+    uint8_t *base = (uint8_t *)data.bytes;
+    uint32_t magic = *(uint32_t *)base;
+    NSMutableArray *slices = [NSMutableArray array];
+    if (magic == FAT_MAGIC || magic == FAT_CIGAM) {
+        BOOL swap = (magic == FAT_CIGAM);
+        struct fat_header *fh = (struct fat_header *)base;
+        uint32_t nfat = PXSwap32(fh->nfat_arch, swap);
+        if (!PXRangeOK(data.length, sizeof(struct fat_header), (uint64_t)nfat * sizeof(struct fat_arch))) {
+            if (error) *error = PXMIError(73, @"Malformed fat header");
+            return nil;
+        }
+        summary[@"isFat"] = @"YES";
+        summary[@"nfat"] = @(nfat);
+        struct fat_arch *arch = (struct fat_arch *)(base + sizeof(struct fat_header));
+        for (uint32_t i = 0; i < nfat; i++) {
+            uint32_t off = PXSwap32(arch[i].offset, swap);
+            uint32_t size = PXSwap32(arch[i].size, swap);
+            NSError *sliceErr = nil;
+            NSDictionary *slice = PXMICodeSignatureSummaryForSlice(data, off, size, &sliceErr);
+            NSMutableDictionary *row = [NSMutableDictionary dictionaryWithDictionary:slice ?: @{}];
+            row[@"index"] = @(i);
+            if (sliceErr) row[@"error"] = sliceErr.localizedDescription ?: @"";
+            [slices addObject:row];
+        }
+    } else {
+        NSError *sliceErr = nil;
+        NSDictionary *slice = PXMICodeSignatureSummaryForSlice(data, 0, data.length, &sliceErr);
+        NSMutableDictionary *row = [NSMutableDictionary dictionaryWithDictionary:slice ?: @{}];
+        row[@"index"] = @0;
+        if (sliceErr) row[@"error"] = sliceErr.localizedDescription ?: @"";
+        [slices addObject:row];
+    }
+    summary[@"slices"] = slices;
+    return summary;
 }
 
 @end
