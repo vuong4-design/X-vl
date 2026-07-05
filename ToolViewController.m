@@ -566,12 +566,22 @@
         [prompt addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
         [prompt addAction:[UIAlertAction actionWithTitle:@"Prepare" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action2) {
             NSString *bundleID = prompt.textFields.firstObject.text ?: @"com.finalwire.aida64";
-            showResult(@"Prepare In-Place", [PXDiagnostics prepareInPlaceBundleID:bundleID]);
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                NSDictionary *result = [PXDiagnostics prepareInPlaceBundleID:bundleID];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    showResult(@"Prepare In-Place", result);
+                });
+            });
         }]];
         [selfRef presentViewController:prompt animated:YES completion:nil];
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"In-Place Status" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
-        showResult(@"In-Place Status", [PXDiagnostics inPlaceStatusBundleID:@"com.finalwire.aida64"]);
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSDictionary *result = [PXDiagnostics inPlaceStatusBundleID:@"com.finalwire.aida64"];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                showResult(@"In-Place Status", result);
+            });
+        });
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Restore In-Place Original" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
         typeof(weakSelf) selfRef = weakSelf;
@@ -581,7 +591,12 @@
                                                                   preferredStyle:UIAlertControllerStyleAlert];
         [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
         [confirm addAction:[UIAlertAction actionWithTitle:@"Restore" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action2) {
-            showResult(@"Restore In-Place", [PXDiagnostics restoreInPlaceBundleID:@"com.finalwire.aida64"]);
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                NSDictionary *result = [PXDiagnostics restoreInPlaceBundleID:@"com.finalwire.aida64"];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    showResult(@"Restore In-Place", result);
+                });
+            });
         }]];
         [selfRef presentViewController:confirm animated:YES completion:nil];
     }]];

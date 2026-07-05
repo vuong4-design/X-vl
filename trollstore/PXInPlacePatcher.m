@@ -135,6 +135,7 @@ static BOOL PXIPWriteState(NSString *bundleID, NSDictionary *state) {
     NSMutableDictionary *result = [NSMutableDictionary dictionary];
     result[@"bundleID"] = bundleID ?: @"";
     [PXDiagnostics log:@"[patch] prepare requested bundleID=%@", bundleID ?: @""];
+    @try {
     if (!bundleID.length) {
         result[@"ok"] = @"NO";
         result[@"error"] = @"Missing bundleID";
@@ -143,6 +144,7 @@ static BOOL PXIPWriteState(NSString *bundleID, NSDictionary *state) {
 
     NSDictionary *resolved = PXIPResolve(bundleID);
     [result addEntriesFromDictionary:resolved];
+    [PXDiagnostics log:@"[patch] prepare resolved=%@", resolved];
     NSString *bundlePath = resolved[@"bundlePath"];
     NSString *executablePath = resolved[@"executablePath"];
     NSString *frameworksPath = resolved[@"frameworksPath"];
@@ -155,16 +157,20 @@ static BOOL PXIPWriteState(NSString *bundleID, NSDictionary *state) {
     }
 
     NSError *snapshotErr = nil;
+    [PXDiagnostics log:@"[patch] prepare exporting snapshot"];
     NSDictionary *snapshot = [PXRuntimeSnapshot exportSnapshotForBundleID:bundleID error:&snapshotErr];
     result[@"snapshotOK"] = snapshot ? @"YES" : @"NO";
     result[@"snapshotError"] = snapshotErr.localizedDescription ?: @"";
 
+    [PXDiagnostics log:@"[patch] prepare hashing executable=%@", executablePath ?: @""];
     NSString *safeVersion = PXIPSafeName([NSString stringWithFormat:@"%@-%@", resolved[@"version"] ?: @"", resolved[@"build"] ?: @""]);
     NSString *backupDir = [[PXIPBackupRoot() stringByAppendingPathComponent:PXIPSafeName(bundleID)] stringByAppendingPathComponent:safeVersion];
     NSString *backupExecutable = [backupDir stringByAppendingPathComponent:[executablePath lastPathComponent]];
     NSString *backupMetadata = [backupDir stringByAppendingPathComponent:@"metadata.plist"];
     NSString *originalHash = PXIPHex(PXIPSHA256(executablePath));
+    [PXDiagnostics log:@"[patch] prepare hash=%@", originalHash ?: @""];
     NSError *mkErr = nil;
+    [PXDiagnostics log:@"[patch] prepare create backupDir=%@", backupDir ?: @""];
     [fm createDirectoryAtPath:backupDir withIntermediateDirectories:YES attributes:nil error:&mkErr];
     if (mkErr) {
         result[@"ok"] = @"NO";
@@ -172,6 +178,7 @@ static BOOL PXIPWriteState(NSString *bundleID, NSDictionary *state) {
         return result;
     }
     if (![fm fileExistsAtPath:backupExecutable]) {
+        [PXDiagnostics log:@"[patch] prepare copying executable to backup=%@", backupExecutable ?: @""];
         NSError *copyErr = nil;
         if (![fm copyItemAtPath:executablePath toPath:backupExecutable error:&copyErr]) {
             result[@"ok"] = @"NO";
@@ -179,12 +186,16 @@ static BOOL PXIPWriteState(NSString *bundleID, NSDictionary *state) {
             return result;
         }
         [fm setAttributes:@{NSFilePosixPermissions: @0755} ofItemAtPath:backupExecutable error:nil];
+    } else {
+        [PXDiagnostics log:@"[patch] prepare backup already exists=%@", backupExecutable ?: @""];
     }
 
+    [PXDiagnostics log:@"[patch] prepare create frameworksPath=%@", frameworksPath ?: @""];
     [fm createDirectoryAtPath:frameworksPath withIntermediateDirectories:YES attributes:nil error:nil];
     NSString *targetDylib = [frameworksPath stringByAppendingPathComponent:@"ProjectXInject.dylib"];
     [fm removeItemAtPath:targetDylib error:nil];
     NSError *dylibCopyErr = nil;
+    [PXDiagnostics log:@"[patch] prepare copying dylib source=%@ target=%@", [PXRuntimeSnapshot bundledInjectDylibPath] ?: @"", targetDylib ?: @""];
     if (![fm copyItemAtPath:[PXRuntimeSnapshot bundledInjectDylibPath] toPath:targetDylib error:&dylibCopyErr]) {
         result[@"ok"] = @"NO";
         result[@"error"] = dylibCopyErr.localizedDescription ?: @"Failed to copy ProjectXInject.dylib into target bundle";
@@ -201,7 +212,9 @@ static BOOL PXIPWriteState(NSString *bundleID, NSDictionary *state) {
     state[@"originalExecutableHash"] = originalHash ?: @"";
     state[@"loadCommandInserted"] = @"NO";
     state[@"dylibLoadPath"] = @"@executable_path/Frameworks/ProjectXInject.dylib";
+    [PXDiagnostics log:@"[patch] prepare writing backup metadata=%@", backupMetadata ?: @""];
     [state writeToFile:backupMetadata atomically:YES];
+    [PXDiagnostics log:@"[patch] prepare writing state=%@", PXIPStatePath(bundleID) ?: @""];
     BOOL stateOK = PXIPWriteState(bundleID, state);
 
     result[@"ok"] = stateOK ? @"YES" : @"NO";
@@ -213,12 +226,19 @@ static BOOL PXIPWriteState(NSString *bundleID, NSDictionary *state) {
     result[@"statePath"] = PXIPStatePath(bundleID);
     [PXDiagnostics log:@"[patch] prepare result=%@", result];
     return result;
+    } @catch (NSException *ex) {
+        result[@"ok"] = @"NO";
+        result[@"error"] = [NSString stringWithFormat:@"Exception during prepare: %@ %@", ex.name ?: @"", ex.reason ?: @""];
+        [PXDiagnostics log:@"[patch] prepare exception=%@", result[@"error"]];
+        return result;
+    }
 }
 
 + (NSDictionary<NSString *,id> *)restoreBundleID:(NSString *)bundleID {
     NSMutableDictionary *result = [NSMutableDictionary dictionary];
     result[@"bundleID"] = bundleID ?: @"";
     [PXDiagnostics log:@"[patch] restore requested bundleID=%@", bundleID ?: @""];
+    @try {
     NSDictionary *state = PXIPReadState(bundleID);
     [result setObject:state ?: @{} forKey:@"state"];
     NSString *executablePath = state[@"executablePath"];
@@ -244,6 +264,12 @@ static BOOL PXIPWriteState(NSString *bundleID, NSDictionary *state) {
     result[@"error"] = @"";
     [PXDiagnostics log:@"[patch] restore result=%@", result];
     return result;
+    } @catch (NSException *ex) {
+        result[@"ok"] = @"NO";
+        result[@"error"] = [NSString stringWithFormat:@"Exception during restore: %@ %@", ex.name ?: @"", ex.reason ?: @""];
+        [PXDiagnostics log:@"[patch] restore exception=%@", result[@"error"]];
+        return result;
+    }
 }
 
 + (NSDictionary<NSString *,id> *)statusForBundleID:(NSString *)bundleID {
