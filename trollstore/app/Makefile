@@ -105,8 +105,6 @@ internal-stage::
 	@cp Info.plist $(THEOS_STAGING_DIR)/Applications/ProjectXTroll.app/Info.plist
 	@echo "Building root helper..."
 	@$(MAKE) -C $(TROLLSTORE_DIR)/helper clean all messages=yes FINALPACKAGE=0 || (echo "Helper build failed" && exit 1)
-	@echo "Building ProjectXInject dylib..."
-	@$(MAKE) -C $(TROLLSTORE_DIR)/inject clean all messages=yes FINALPACKAGE=0 || (echo "ProjectXInject build failed" && exit 1)
 	@echo "Installing root helper into app bundle..."
 	@HELPER_BIN="$$(find $(TROLLSTORE_DIR)/helper $(THEOS_OBJ_DIR) .theos -type f -name weaponx_root_helper 2>/dev/null | head -n 1)"; \
 	if [ ! -f "$$HELPER_BIN" ]; then \
@@ -118,6 +116,8 @@ internal-stage::
 	echo "Using helper binary: $$HELPER_BIN"; \
 	cp "$$HELPER_BIN" $(THEOS_STAGING_DIR)/Applications/ProjectXTroll.app/weaponx_root_helper; \
 	chmod 755 $(THEOS_STAGING_DIR)/Applications/ProjectXTroll.app/weaponx_root_helper
+	@echo "Building ProjectXInject dylib..."
+	@$(MAKE) -C $(TROLLSTORE_DIR)/inject clean all messages=yes FINALPACKAGE=0 || (echo "ProjectXInject build failed" && exit 1)
 	@echo "Installing ProjectXInject dylib into app bundle..."
 	@INJECT_DYLIB="$$(find $(TROLLSTORE_DIR)/inject $(THEOS_OBJ_DIR) .theos -type f \( -name ProjectXInject.dylib -o -name libProjectXInject.dylib -o -name '*ProjectXInject*.dylib' \) 2>/dev/null | head -n 1)"; \
 	if [ ! -f "$$INJECT_DYLIB" ]; then \
