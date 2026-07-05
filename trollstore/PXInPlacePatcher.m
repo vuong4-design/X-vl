@@ -4,7 +4,6 @@
 #import "PXDiagnostics.h"
 #import "PXRuntimeSnapshot.h"
 
-#import <CommonCrypto/CommonDigest.h>
 #import <objc/message.h>
 
 NSString * const PXInPlacePatcherErrorDomain = @"PXInPlacePatcherErrorDomain";
@@ -28,31 +27,12 @@ static NSString *PXIPSafeName(NSString *value) {
     return s.length ? [s copy] : @"unknown";
 }
 
-static NSData *PXIPSHA256(NSString *path) {
-    NSInputStream *stream = [NSInputStream inputStreamWithFileAtPath:path];
-    [stream open];
-    CC_SHA256_CTX ctx;
-    CC_SHA256_Init(&ctx);
-    uint8_t buffer[1024 * 1024];
-    while (stream.streamStatus == NSStreamStatusOpen || stream.streamStatus == NSStreamStatusReading) {
-        NSInteger read = [stream read:buffer maxLength:sizeof(buffer)];
-        if (read > 0) {
-            CC_SHA256_Update(&ctx, buffer, (CC_LONG)read);
-        } else {
-            break;
-        }
-    }
-    [stream close];
-    uint8_t digest[CC_SHA256_DIGEST_LENGTH];
-    CC_SHA256_Final(digest, &ctx);
-    return [NSData dataWithBytes:digest length:sizeof(digest)];
-}
-
-static NSString *PXIPHex(NSData *data) {
-    const unsigned char *bytes = data.bytes;
-    NSMutableString *s = [NSMutableString stringWithCapacity:data.length * 2];
-    for (NSUInteger i = 0; i < data.length; i++) [s appendFormat:@"%02x", bytes[i]];
-    return s;
+static NSString *PXIPFileFingerprint(NSString *path) {
+    NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
+    NSNumber *size = attrs[NSFileSize] ?: @0;
+    NSDate *mtime = attrs[NSFileModificationDate];
+    NSTimeInterval ts = mtime ? [mtime timeIntervalSince1970] : 0;
+    return [NSString stringWithFormat:@"size:%@ mtime:%.0f", size, ts];
 }
 
 static id PXIPProxy(NSString *bundleID) {
@@ -162,13 +142,13 @@ static BOOL PXIPWriteState(NSString *bundleID, NSDictionary *state) {
     result[@"snapshotOK"] = snapshot ? @"YES" : @"NO";
     result[@"snapshotError"] = snapshotErr.localizedDescription ?: @"";
 
-    [PXDiagnostics log:@"[patch] prepare hashing executable=%@", executablePath ?: @""];
+    [PXDiagnostics log:@"[patch] prepare fingerprint executable=%@", executablePath ?: @""];
     NSString *safeVersion = PXIPSafeName([NSString stringWithFormat:@"%@-%@", resolved[@"version"] ?: @"", resolved[@"build"] ?: @""]);
     NSString *backupDir = [[PXIPBackupRoot() stringByAppendingPathComponent:PXIPSafeName(bundleID)] stringByAppendingPathComponent:safeVersion];
     NSString *backupExecutable = [backupDir stringByAppendingPathComponent:[executablePath lastPathComponent]];
     NSString *backupMetadata = [backupDir stringByAppendingPathComponent:@"metadata.plist"];
-    NSString *originalHash = PXIPHex(PXIPSHA256(executablePath));
-    [PXDiagnostics log:@"[patch] prepare hash=%@", originalHash ?: @""];
+    NSString *originalHash = PXIPFileFingerprint(executablePath);
+    [PXDiagnostics log:@"[patch] prepare fingerprint=%@", originalHash ?: @""];
     NSError *mkErr = nil;
     [PXDiagnostics log:@"[patch] prepare create backupDir=%@", backupDir ?: @""];
     [fm createDirectoryAtPath:backupDir withIntermediateDirectories:YES attributes:nil error:&mkErr];
