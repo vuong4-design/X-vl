@@ -12,6 +12,7 @@
 #import "CommandRunner.h"
 #import "common/PXProcessKiller.h"
 #ifdef PROJECTX_TROLLSTORE
+#import "PXArchive.h"
 #import "PXDiagnostics.h"
 #endif
 
@@ -307,7 +308,22 @@ static NSString *PXFindDataContainerUUIDByMetadata(NSFileManager *fm, NSString *
 - (CommandResult *)_tarCreate:(NSString *)tarPath fromDir:(NSString *)sourceDir toArchive:(NSString *)archivePath {
 #ifdef PROJECTX_TROLLSTORE
     [PXDiagnostics log:@"[backup] _tarCreate tarPath=%@ source=%@ archive=%@", tarPath ?: @"", sourceDir ?: @"", archivePath ?: @""];
+    CommandResult *result = [[CommandResult alloc] init];
+    NSError *archiveErr = nil;
+    if (PXArchiveCreateDirectoryArchive(sourceDir, archivePath, &archiveErr)) {
+        result.exitCode = 0;
+        result.stdoutString = @"PXArchive create ok";
+        result.stderrString = @"";
+        [PXDiagnostics log:@"[backup] PXArchive create ok archive=%@", archivePath ?: @""];
+        return result;
+    }
+    result.exitCode = 1;
+    result.stdoutString = @"";
+    result.stderrString = archiveErr.localizedDescription ?: @"PXArchive create failed";
+    [PXDiagnostics log:@"[backup] PXArchive create failed error=%@", result.stderrString ?: @""];
+    return result;
 #endif
+#ifndef PROJECTX_TROLLSTORE
     CommandRunner *runner = [CommandRunner shared];
 
     // Prefer preserving extended attributes (file protection class), ACLs and numeric owners.
@@ -326,6 +342,7 @@ static NSString *PXFindDataContainerUUIDByMetadata(NSFileManager *fm, NSString *
                           PXShellQuote(archivePath),
                           PXShellQuote(sourceDir)];
     return [runner runAndCapture:fallback];
+#endif
 }
 
 static NSString *PXTimestampSuffix(void) {
@@ -439,7 +456,22 @@ static NSString *PXCleanSubdirName(NSString *s) {
 - (CommandResult *)_tarExtract:(NSString *)tarPath archive:(NSString *)archivePath toDir:(NSString *)destDir {
 #ifdef PROJECTX_TROLLSTORE
     [PXDiagnostics log:@"[backup] _tarExtract tarPath=%@ archive=%@ dest=%@", tarPath ?: @"", archivePath ?: @"", destDir ?: @""];
+    CommandResult *result = [[CommandResult alloc] init];
+    NSError *archiveErr = nil;
+    if (PXArchiveExtractArchiveToDirectory(archivePath, destDir, &archiveErr)) {
+        result.exitCode = 0;
+        result.stdoutString = @"PXArchive extract ok";
+        result.stderrString = @"";
+        [PXDiagnostics log:@"[backup] PXArchive extract ok archive=%@ dest=%@", archivePath ?: @"", destDir ?: @""];
+        return result;
+    }
+    result.exitCode = 1;
+    result.stdoutString = @"";
+    result.stderrString = archiveErr.localizedDescription ?: @"PXArchive extract failed";
+    [PXDiagnostics log:@"[backup] PXArchive extract failed error=%@", result.stderrString ?: @""];
+    return result;
 #endif
+#ifndef PROJECTX_TROLLSTORE
     CommandRunner *runner = [CommandRunner shared];
 
     // Always pass --overwrite. The caller may have failed to fully wipe the
@@ -473,6 +505,7 @@ static NSString *PXCleanSubdirName(NSString *s) {
                       PXShellQuote(archivePath),
                       PXShellQuote(destDir)];
     return [runner runAndCapture:bare];
+#endif
 }
 
 - (NSString *)_preferencesDirectory {
@@ -1088,6 +1121,9 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
         NSString *profileId = [self _activeProfileId];
 
         // Prefer jailbreak/Procursus tar first (often has xattrs/acl support); /usr/bin/tar on iOS may not.
+#ifdef PROJECTX_TROLLSTORE
+        NSString *tarPath = @"PXArchive";
+#else
         NSString *tarPath = [runner firstExistingPath:@[
             @"/var/jb/usr/bin/gtar",
             @"/private/preboot/jb/usr/bin/gtar",
@@ -1112,6 +1148,7 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
             dispatch_async(dispatch_get_main_queue(), ^{ if (completion) completion(nil, err); });
             return;
         }
+#endif
 
         // Prefer LaunchServices-reported container path (active container).
         NSString *dataContainerPath = nil;
@@ -1731,6 +1768,10 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
         }
 
         // Prefer jailbreak/Procursus tar first (often has xattrs/acl support); /usr/bin/tar on iOS may not.
+#ifdef PROJECTX_TROLLSTORE
+        NSString *tarPath = @"PXArchive";
+        [PXDiagnostics log:@"[restore] start bundleID=%@ appName=%@ backupDir=%@ archive=%@", bundleID ?: @"", appName ?: @"", backupDir ?: @"", tarPath];
+#else
         NSString *tarPath = [runner firstExistingPath:@[
             @"/var/jb/usr/bin/gtar",
             @"/private/preboot/jb/usr/bin/gtar",
@@ -1752,6 +1793,7 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
             dispatch_async(dispatch_get_main_queue(), ^{ if (completion) completion(nil, err); });
             return;
         }
+#endif
 
         PXDebugAppendLine(debugPre, [NSString stringWithFormat:@"tarPath=%@", tarPath]);
 
@@ -1996,6 +2038,20 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
             return;
         }
         PXDebugRun(runner, debugPre, @"ls container (after wipe)", [NSString stringWithFormat:@"ls -la %@ 2>/dev/null || true", PXShellQuote(dataContainerPath)]);
+#ifdef PROJECTX_TROLLSTORE
+        NSError *cloneErr = nil;
+        if (!PXArchiveCloneDirectoryContents(stagingData, dataContainerPath, &cloneErr)) {
+            [fm removeItemAtPath:stagingRoot error:nil];
+            NSString *msg = cloneErr.localizedDescription ?: @"PXArchive clone failed";
+            [PXDiagnostics log:@"[restore] PXArchive clone failed error=%@", msg];
+            NSError *err = [NSError errorWithDomain:PXBackupErrorDomain
+                                               code:317
+                                           userInfo:@{NSLocalizedDescriptionKey: msg}];
+            dispatch_async(dispatch_get_main_queue(), ^{ if (completion) completion(nil, err); });
+            return;
+        }
+        [PXDiagnostics log:@"[restore] PXArchive clone ok source=%@ dest=%@", stagingData ?: @"", dataContainerPath ?: @""];
+#else
         BOOL shouldPreferCpClone = NO;
         if ([tarPath isEqualToString:@"/usr/bin/tar"] || [tarPath isEqualToString:@"/bin/tar"]) {
             // iOS system tar commonly lacks xattrs/acl support.
@@ -2046,6 +2102,7 @@ static NSDictionary *PXWaitForKeychainBridgeResponse(NSString *safeBundle, NSStr
                 return;
             }
         }
+#endif
 
         // Ensure ownership is correct (some extraction/copy paths may produce root-owned files).
         [runner run:[NSString stringWithFormat:@"chown -R mobile:mobile %@ 2>/dev/null || true", PXShellQuote(dataContainerPath)]];

@@ -14,7 +14,8 @@
 |---|---|
 | Nguồn `TSUtil` | Copy `TSUtil.{h,m}` từ TrollStore repo (user tự thêm nội dung) |
 | Mục tiêu build | Tách target TrollStore riêng — **Makefile riêng** tại `trollstore/app/Makefile` |
-| Tar (G4.2) | `libarchive` |
+| Archive (G4.2) | TrollStore dùng `PXArchive` in-process; rootful vẫn dùng tar |
+| Entitlements | Target TrollStore dùng `trollstore/app/entitlements.plist`; helper dùng `trollstore/helper/entitlements.plist`; CI re-sign + verify trước khi zip `.tipa` |
 | G2 phân lô | 3 PR (PR-R1 → PR-R2 → PR-R3) |
 | UI | Không đụng cho tới G6.3 |
 | Dọn jailbreak | Để G6 |
@@ -165,9 +166,11 @@ Test "iOS 17.6+ → `PXRootHelperErrorUnavailable`". Phụ thuộc `TSUtil` th�
 - **G4.1** khảo sát `AppDataBackupManager.m` (read-only): grep
   `runCommand*`/`NSTask`/`posix_spawn`/`/bin/sh`/`tar`/`gzip`; xác định cấu trúc
   bundle + restore có chown/permission.
-- **G4.2** tar in-process bằng **`libarchive`**: API mới `PXFileOps`
-  `createTarArchiveAtPath:fromDirectory:` + `extractTarArchiveAtPath:toDirectory:preservePermissions:`.
-  Link `-larchive`; verify `otool -L` libarchive có trên target trước khi khóa.
+- **G4.2** archive in-process cho TrollStore: đã thêm `trollstore/PXArchive.{h,m}`
+  và wire `_tarCreate`/`_tarExtract` trong `AppDataBackupManager.m` dưới
+  `PROJECTX_TROLLSTORE`. Rootful/jailbreak path vẫn dùng tar cũ. File vẫn giữ
+  tên `*.tar.gz` để không phải đổi manifest/UI, nhưng backup mới từ TrollStore
+  dùng format nội bộ `PXAR` thay vì tar/gzip.
 - **G4.3** restore: extract uid 501 → staging; system-scoped → `PXRootHelper chown`;
   `mv` cuối (mobile in-process `rename(2)`, system → `PXRootHelper mv`, op đã có).
 
@@ -188,8 +191,9 @@ Phụ thuộc `TSUtil` thật.
 - **Diagnostics hiện tại**: đã thêm `PXDiagnostics` ghi log tại
   `/var/mobile/Library/ProjectXTroll/diagnostic.log`, menu tạm `Diag` trong
   `ToolViewController`, self-test environment/root-helper/router, instrumentation
-  cho `PXShellRouter`, `PXRootHelper`, backup start/tar failure và warning rõ rằng
-  runtime hooks của `ProjectXTweak` không hoạt động trong TrollStore-only app.
+  cho `PXShellRouter`, `PXRootHelper`, entitlement snapshot/check, backup start/tar
+  failure và warning rõ rằng runtime hooks của `ProjectXTweak` không hoạt động
+  trong TrollStore-only app.
 - **G6.4** smoke test 8 scenario × 2 device.
 - **G6.5** đồng bộ tài liệu: cập nhật `HANDOFF.md` (đang lệch) + `MIGRATION_PLAN.md`
   + thêm `ROUTER_REFERENCE.md`.

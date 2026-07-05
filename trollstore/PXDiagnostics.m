@@ -1,6 +1,7 @@
 // PXDiagnostics.m — TrollStore debug logging and self-tests.
 
 #import "PXDiagnostics.h"
+#import "PXEntitlements.h"
 #import "PXRootHelper.h"
 #import "PXShellRouter.h"
 
@@ -95,6 +96,71 @@ static NSString *PXDiagString(id obj) {
         @"writeProjectXTrollLibrary": libWrite ? @"YES" : PXDiagString(libErr.localizedDescription),
     };
     [self log:@"[env] %@", info];
+    return info;
+}
+
+static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, id> *entitlements, NSArray<NSString *> *requiredKeys) {
+    NSMutableArray<NSString *> *missing = [NSMutableArray array];
+    for (NSString *key in requiredKeys) {
+        id value = entitlements[key];
+        if (!value || ([value respondsToSelector:@selector(boolValue)] && ![value boolValue])) {
+            [missing addObject:key];
+        }
+    }
+    return missing;
+}
+
++ (NSDictionary<NSString *,id> *)entitlementsSnapshot {
+    [self log:@"[entitlements] starting entitlement snapshot"];
+
+    NSBundle *bundle = [NSBundle mainBundle];
+    NSString *executableName = bundle.infoDictionary[@"CFBundleExecutable"];
+    NSString *mainPath = executableName.length ? [bundle.bundlePath stringByAppendingPathComponent:executableName] : @"";
+    NSString *helperPath = [[PXRootHelper sharedHelper] helperBinaryPath] ?: @"";
+
+    NSArray<NSString *> *requiredApp = @[
+        @"platform-application",
+        @"com.apple.private.persona-mgmt",
+        @"com.apple.private.security.no-sandbox",
+        @"com.apple.private.security.no-container",
+        @"com.apple.private.MobileContainerManager.allowed",
+        @"com.apple.private.security.container-manager"
+    ];
+    NSArray<NSString *> *requiredHelper = @[
+        @"platform-application",
+        @"com.apple.private.persona-mgmt",
+        @"com.apple.private.security.no-sandbox",
+        @"com.apple.private.security.no-container"
+    ];
+
+    NSError *mainErr = nil;
+    NSError *helperErr = nil;
+    NSDictionary *mainEnt = mainPath.length ? [PXEntitlements entitlementsForBinaryAtPath:mainPath error:&mainErr] : nil;
+    NSDictionary *helperEnt = helperPath.length ? [PXEntitlements entitlementsForBinaryAtPath:helperPath error:&helperErr] : nil;
+    NSArray *missingMain = mainEnt ? PXDiagMissingEntitlements(mainEnt, requiredApp) : requiredApp;
+    NSArray *missingHelper = helperEnt ? PXDiagMissingEntitlements(helperEnt, requiredHelper) : requiredHelper;
+
+    NSDictionary *info = @{
+        @"mainPath": mainPath ?: @"",
+        @"helperPath": helperPath ?: @"",
+        @"mainReadOK": mainEnt ? @"YES" : @"NO",
+        @"helperReadOK": helperEnt ? @"YES" : @"NO",
+        @"mainError": mainErr.localizedDescription ?: @"",
+        @"helperError": helperErr.localizedDescription ?: @"",
+        @"missingMain": missingMain ?: @[],
+        @"missingHelper": missingHelper ?: @[],
+        @"mainEntitlements": mainEnt ?: @{},
+        @"helperEntitlements": helperEnt ?: @{},
+    };
+    [self log:@"[entitlements] mainPath=%@ helperPath=%@ missingMain=%@ missingHelper=%@ mainError=%@ helperError=%@",
+     mainPath ?: @"",
+     helperPath ?: @"",
+     missingMain ?: @[],
+     missingHelper ?: @[],
+     mainErr.localizedDescription ?: @"",
+     helperErr.localizedDescription ?: @""];
+    [self log:@"[entitlements] main=%@", mainEnt ?: @{}];
+    [self log:@"[entitlements] helper=%@", helperEnt ?: @{}];
     return info;
 }
 

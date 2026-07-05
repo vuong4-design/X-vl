@@ -33,6 +33,7 @@ TROLLSTORE_DIR = ..
 ProjectXTroll_FILES = \
 	$(wildcard $(REPO_ROOT)/*.m) \
 	$(wildcard $(REPO_ROOT)/common/*.m) \
+	$(TROLLSTORE_DIR)/PXArchive.m \
 	$(TROLLSTORE_DIR)/PXDiagnostics.m \
 	$(TROLLSTORE_DIR)/PXShellRouter.m \
 	$(TROLLSTORE_DIR)/PXEntitlements.m \
@@ -69,9 +70,9 @@ ProjectXTroll_LDFLAGS = \
 	-weak_framework Security \
 	-lsqlite3
 
-# Codesign with TrollStore-friendly entitlements (reuse root ent.plist for now;
-# G6.1 will trim this down to TrollStore-only set).
-ProjectXTroll_CODESIGN_FLAGS = -S$(REPO_ROOT)/ent.plist
+# Codesign with TrollStore-specific entitlements. Keep this separate from the
+# jailbreak/rootful entitlements so packaging can verify the exact signed keys.
+ProjectXTroll_CODESIGN_FLAGS = -S$(TROLLSTORE_DIR)/app/entitlements.plist
 
 # Header search paths: app code includes "common/..." and now "PXEntitlements.h".
 ProjectXTroll_CFLAGS = \

@@ -12,6 +12,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSString *)readLogTailWithMaxBytes:(NSUInteger)maxBytes;
 
 + (NSDictionary<NSString *, id> *)environmentSnapshot;
++ (NSDictionary<NSString *, id> *)entitlementsSnapshot;
 + (NSDictionary<NSString *, id> *)rootHelperSelfTest;
 + (NSDictionary<NSString *, id> *)routerFixtureSelfTest;
 

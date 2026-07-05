@@ -504,6 +504,9 @@
     [alert addAction:[UIAlertAction actionWithTitle:@"Run Environment Check" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         showResult(@"Environment Check", [PXDiagnostics environmentSnapshot]);
     }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Run Entitlements Check" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        showResult(@"Entitlements Check", [PXDiagnostics entitlementsSnapshot]);
+    }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Run Root Helper Test" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         showResult(@"Root Helper Test", [PXDiagnostics rootHelperSelfTest]);
     }]];
