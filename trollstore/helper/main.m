@@ -12,6 +12,7 @@
 //   weaponx_root_helper chmod   <octal-mode> <absolute-path> [-R]
 //   weaponx_root_helper chflags clear <absolute-path> [-R]
 //   weaponx_root_helper mv      <src-absolute-path> <dst-absolute-path>
+//   weaponx_root_helper dyldlaunch <executable> <dylib> <home> <bundleID>
 //
 // Exit codes:
 //   0  success
@@ -32,6 +33,13 @@
 #import <stdlib.h>
 #import <errno.h>
 #import <fnmatch.h>
+#import <spawn.h>
+#import <sys/wait.h>
+
+#define POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE 1
+extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t* __restrict, uid_t, uint32_t);
+extern int posix_spawnattr_set_persona_uid_np(const posix_spawnattr_t* __restrict, uid_t);
+extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t* __restrict, uid_t);
 
 // Allowlisted path prefixes. Keep narrow; each new prefix needs justification.
 static const char *kAllowedPrefixes[] = {
@@ -67,6 +75,10 @@ static const char *kAllowedPrefixes[] = {
 
     // Bundle containers (read mostly; for chmod adjustments before move).
     "/var/containers/Bundle/Application/",
+    "/private/var/containers/Bundle/Application/",
+
+    // TrollStore app bundle resources copied into target launches.
+    "/Applications/ProjectXTroll.app/",
     "/private/var/containers/Bundle/Application/",
 
     // tmp staging area used by restore/backup pipelines.
@@ -245,6 +257,52 @@ static int op_mv(NSString *src, NSString *dst) {
     return 0;
 }
 
+static int op_dyldlaunch(NSString *executable, NSString *dylib, NSString *home, NSString *bundleID) {
+    if (!pathIsAllowed(executable)) { perr(@"dyldlaunch: executable not allowed: %@", executable); return 2; }
+    if (!pathIsAllowed(dylib)) { perr(@"dyldlaunch: dylib not allowed: %@", dylib); return 2; }
+    NSString *homeForAllow = [home hasSuffix:@"/"] ? home : [home stringByAppendingString:@"/"];
+    if (!pathIsAllowed(homeForAllow)) { perr(@"dyldlaunch: home not allowed: %@", home); return 2; }
+    if (bundleID.length == 0 || [bundleID containsString:@"/"]) { perr(@"dyldlaunch: invalid bundleID: %@", bundleID); return 2; }
+    if (access(executable.fileSystemRepresentation, X_OK) != 0) { perr(@"dyldlaunch: executable not executable: %@ (%s)", executable, strerror(errno)); return 3; }
+    if (access(dylib.fileSystemRepresentation, R_OK) != 0) { perr(@"dyldlaunch: dylib not readable: %@ (%s)", dylib, strerror(errno)); return 3; }
+
+    NSString *tmpDir = [home stringByAppendingPathComponent:@"tmp"];
+    mkdir(tmpDir.fileSystemRepresentation, 0700);
+
+    const char *argv[] = { executable.fileSystemRepresentation, NULL };
+    NSString *dyld = [@"DYLD_INSERT_LIBRARIES=" stringByAppendingString:dylib];
+    NSString *homeEnv = [@"HOME=" stringByAppendingString:home];
+    NSString *cfHome = [@"CFFIXED_USER_HOME=" stringByAppendingString:home];
+    NSString *tmpEnv = [@"TMPDIR=" stringByAppendingString:[tmpDir stringByAppendingString:@"/"]];
+    NSString *bidEnv = [@"PROJECTX_TARGET_BUNDLE_ID=" stringByAppendingString:bundleID];
+    NSString *flagEnv = @"PROJECTX_DYLD_LAUNCH=1";
+    const char *envp[] = {
+        dyld.UTF8String,
+        homeEnv.UTF8String,
+        cfHome.UTF8String,
+        tmpEnv.UTF8String,
+        bidEnv.UTF8String,
+        flagEnv.UTF8String,
+        NULL
+    };
+
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    posix_spawnattr_set_persona_np(&attr, 99, POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE);
+    posix_spawnattr_set_persona_uid_np(&attr, 501);
+    posix_spawnattr_set_persona_gid_np(&attr, 501);
+
+    pid_t pid = 0;
+    int rc = posix_spawn(&pid, executable.fileSystemRepresentation, NULL, &attr, (char *const *)argv, (char *const *)envp);
+    posix_spawnattr_destroy(&attr);
+    if (rc != 0) {
+        perr(@"dyldlaunch: posix_spawn failed executable=%@ rc=%d (%s)", executable, rc, strerror(rc));
+        return 3;
+    }
+    printf("pid=%d\n", pid);
+    return 0;
+}
+
 #pragma mark - main
 
 int main(int argc, char *argv[]) {
@@ -277,6 +335,10 @@ int main(int argc, char *argv[]) {
         if ([op isEqualToString:@"mv"]) {
             if (argc != 4) { perr(@"mv: expects <src> <dst>"); return 2; }
             return op_mv(@(argv[2]), @(argv[3]));
+        }
+        if ([op isEqualToString:@"dyldlaunch"]) {
+            if (argc != 6) { perr(@"dyldlaunch: expects <executable> <dylib> <home> <bundleID>"); return 2; }
+            return op_dyldlaunch(@(argv[2]), @(argv[3]), @(argv[4]), @(argv[5]));
         }
 
         perr(@"unknown op: %@", op);

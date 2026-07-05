@@ -532,6 +532,25 @@
         }]];
         [selfRef presentViewController:prompt animated:YES completion:nil];
     }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Launch With DYLD" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        typeof(weakSelf) selfRef = weakSelf;
+        if (!selfRef) return;
+        UIAlertController *prompt = [UIAlertController alertControllerWithTitle:@"DYLD Launcher"
+                                                                        message:@"Experimental. The target app may fail to launch or ignore DYLD_INSERT_LIBRARIES."
+                                                                 preferredStyle:UIAlertControllerStyleAlert];
+        [prompt addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+            textField.placeholder = @"com.finalwire.aida64";
+            textField.text = @"com.finalwire.aida64";
+            textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+            textField.autocorrectionType = UITextAutocorrectionTypeNo;
+        }];
+        [prompt addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+        [prompt addAction:[UIAlertAction actionWithTitle:@"Launch" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action2) {
+            NSString *bundleID = prompt.textFields.firstObject.text ?: @"com.finalwire.aida64";
+            showResult(@"DYLD Launcher", [PXDiagnostics dyldLaunchBundleID:bundleID]);
+        }]];
+        [selfRef presentViewController:prompt animated:YES completion:nil];
+    }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Copy Log Tail" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         [UIPasteboard generalPasteboard].string = [PXDiagnostics readLogTailWithMaxBytes:20000];
     }]];

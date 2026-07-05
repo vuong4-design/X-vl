@@ -1,6 +1,7 @@
 // PXDiagnostics.m — TrollStore debug logging and self-tests.
 
 #import "PXDiagnostics.h"
+#import "PXDYLDLauncher.h"
 #import "PXEntitlements.h"
 #import "PXRootHelper.h"
 #import "PXRuntimeSnapshot.h"
@@ -233,6 +234,12 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     info[@"exportError"] = err.localizedDescription ?: @"";
     [self log:@"[inject] snapshot status=%@", info];
     return info;
+}
+
++ (NSDictionary<NSString *,id> *)dyldLaunchBundleID:(NSString *)bundleID {
+    NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
+    [self log:@"[dyld] diagnostic launch bundleID=%@", targetBundleID];
+    return [PXDYLDLauncher launchBundleID:targetBundleID timeout:6.0];
 }
 
 @end

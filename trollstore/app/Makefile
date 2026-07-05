@@ -35,6 +35,7 @@ ProjectXTroll_FILES = \
 	$(wildcard $(REPO_ROOT)/common/*.m) \
 	$(TROLLSTORE_DIR)/PXArchive.m \
 	$(TROLLSTORE_DIR)/PXDiagnostics.m \
+	$(TROLLSTORE_DIR)/PXDYLDLauncher.m \
 	$(TROLLSTORE_DIR)/PXShellRouter.m \
 	$(TROLLSTORE_DIR)/PXEntitlements.m \
 	$(TROLLSTORE_DIR)/PXFileOps.m \

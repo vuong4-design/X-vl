@@ -16,7 +16,7 @@
 | Mục tiêu build | Tách target TrollStore riêng — **Makefile riêng** tại `trollstore/app/Makefile` |
 | Archive (G4.2) | TrollStore dùng `PXArchive` in-process; rootful vẫn dùng tar |
 | Entitlements | Target TrollStore dùng `trollstore/app/entitlements.plist`; helper dùng `trollstore/helper/entitlements.plist`; CI re-sign + verify trước khi zip `.tipa` |
-| Injection | Batch 1 thêm `ProjectXInject.dylib` substrate-free, runtime snapshot, loaded marker; DYLD/patcher backend triển khai sau |
+| Injection | Batch 1 thêm `ProjectXInject.dylib` substrate-free, runtime snapshot, loaded marker; Batch 2 thêm DYLD launcher prototype; in-place patcher triển khai sau |
 | G2 phân lô | 3 PR (PR-R1 → PR-R2 → PR-R3) |
 | UI | Không đụng cho tới G6.3 |
 | Dọn jailbreak | Để G6 |
