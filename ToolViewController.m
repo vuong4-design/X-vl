@@ -591,6 +591,23 @@
             });
         });
     }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Install Patched Copy" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
+        typeof(weakSelf) selfRef = weakSelf;
+        if (!selfRef) return;
+        UIAlertController *confirm = [UIAlertController alertControllerWithTitle:@"Install Patched Copy"
+                                                                         message:@"This replaces the target executable with the patched copy. Restore Original can roll back if launch fails."
+                                                                  preferredStyle:UIAlertControllerStyleAlert];
+        [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+        [confirm addAction:[UIAlertAction actionWithTitle:@"Install" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action2) {
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                NSDictionary *result = [PXDiagnostics installPatchedInPlaceCopyBundleID:@"com.finalwire.aida64"];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    showResult(@"Install Patched Copy", result);
+                });
+            });
+        }]];
+        [selfRef presentViewController:confirm animated:YES completion:nil];
+    }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Restore In-Place Original" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
         typeof(weakSelf) selfRef = weakSelf;
         if (!selfRef) return;

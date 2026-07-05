@@ -97,6 +97,19 @@ static NSDictionary *PXIPResolve(NSString *bundleID) {
     };
 }
 
+static BOOL PXIPOpenBundleID(NSString *bundleID) {
+    @try {
+        Class wsCls = NSClassFromString(@"LSApplicationWorkspace");
+        id ws = [wsCls respondsToSelector:@selector(defaultWorkspace)] ? ((id (*)(id, SEL))objc_msgSend)(wsCls, @selector(defaultWorkspace)) : nil;
+        SEL openSel = NSSelectorFromString(@"openApplicationWithBundleID:");
+        if (ws && [ws respondsToSelector:openSel]) {
+            return ((BOOL (*)(id, SEL, id))objc_msgSend)(ws, openSel, bundleID);
+        }
+    } @catch (__unused NSException *e) {
+    }
+    return NO;
+}
+
 static NSString *PXIPStatePath(NSString *bundleID) {
     return [[PXIPStateDir() stringByAppendingPathComponent:PXIPSafeName(bundleID)] stringByAppendingPathExtension:@"plist"];
 }
@@ -275,6 +288,69 @@ static BOOL PXIPRunRoot(NSArray<NSString *> *argv, NSString **outError) {
         result[@"ok"] = @"NO";
         result[@"error"] = [NSString stringWithFormat:@"Exception during patch prepared copy: %@ %@", ex.name ?: @"", ex.reason ?: @""];
         [PXDiagnostics log:@"[patch] patch prepared copy exception=%@", result[@"error"]];
+        return result;
+    }
+}
+
++ (NSDictionary<NSString *,id> *)installPatchedCopyBundleID:(NSString *)bundleID {
+    NSMutableDictionary *result = [NSMutableDictionary dictionary];
+    result[@"bundleID"] = bundleID ?: @"";
+    [PXDiagnostics log:@"[patch] install patched copy requested bundleID=%@", bundleID ?: @""];
+    @try {
+        NSDictionary *state = PXIPReadState(bundleID);
+        result[@"state"] = state ?: @{};
+        NSString *patchedCopy = state[@"patchedCopy"];
+        NSString *executablePath = state[@"executablePath"];
+        if (!patchedCopy.length || ![[NSFileManager defaultManager] fileExistsAtPath:patchedCopy]) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = @"No patched copy found. Run Patch Prepared Copy first.";
+            return result;
+        }
+        if (!executablePath.length) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = @"Missing executable path in state";
+            return result;
+        }
+
+        NSString *rootErr = nil;
+        [PXDiagnostics log:@"[patch] installing patched copy source=%@ executable=%@", patchedCopy ?: @"", executablePath ?: @""];
+        if (!PXIPRunRoot(@[@"cpfile", patchedCopy, executablePath], &rootErr)) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = rootErr ?: @"Failed to install patched executable";
+            return result;
+        }
+
+        NSMutableDictionary *newState = [NSMutableDictionary dictionaryWithDictionary:state ?: @{}];
+        newState[@"mode"] = @"inplace-installed-unsigned";
+        newState[@"installedPatchedCopy"] = @"YES";
+        newState[@"installedAt"] = @([[NSDate date] timeIntervalSince1970]);
+        newState[@"signatureStatus"] = @"not-resigned";
+        PXIPWriteState(bundleID, newState);
+
+        NSDictionary *runtimeStatus = [PXRuntimeSnapshot statusForBundleID:bundleID];
+        NSString *targetMarkerPath = runtimeStatus[@"targetMarkerPath"];
+        if (targetMarkerPath.length) [[NSFileManager defaultManager] removeItemAtPath:targetMarkerPath error:nil];
+        BOOL opened = PXIPOpenBundleID(bundleID);
+        result[@"openApplication"] = opened ? @"YES" : @"NO";
+        result[@"targetMarkerPath"] = targetMarkerPath ?: @"";
+
+        NSDictionary *marker = nil;
+        NSTimeInterval deadline = [[NSDate date] timeIntervalSince1970] + 6.0;
+        while ([[NSDate date] timeIntervalSince1970] < deadline) {
+            marker = targetMarkerPath.length ? [NSDictionary dictionaryWithContentsOfFile:targetMarkerPath] : nil;
+            if ([marker isKindOfClass:[NSDictionary class]] && marker.count) break;
+            [NSThread sleepForTimeInterval:0.25];
+        }
+        result[@"markerFound"] = marker.count ? @"YES" : @"NO";
+        result[@"marker"] = marker ?: @{};
+        result[@"ok"] = @"YES";
+        result[@"error"] = marker.count ? @"" : @"Patched executable installed, but marker was not written. App may need re-signing or may have crashed.";
+        [PXDiagnostics log:@"[patch] install patched copy result=%@", result];
+        return result;
+    } @catch (NSException *ex) {
+        result[@"ok"] = @"NO";
+        result[@"error"] = [NSString stringWithFormat:@"Exception during install patched copy: %@ %@", ex.name ?: @"", ex.reason ?: @""];
+        [PXDiagnostics log:@"[patch] install patched copy exception=%@", result[@"error"]];
         return result;
     }
 }
