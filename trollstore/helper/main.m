@@ -294,13 +294,50 @@ static int op_cpfile(NSString *src, NSString *dst) {
         perr(@"cpfile mkdir parent '%@' failed: %@", parent, err.localizedDescription ?: @"unknown error");
         return 3;
     }
-    [fm removeItemAtPath:dst error:nil];
-    err = nil;
-    if (![fm copyItemAtPath:src toPath:dst error:&err]) {
-        perr(@"cpfile '%@' -> '%@' failed: %@", src, dst, err.localizedDescription ?: @"unknown error");
+    int inFd = open(src.fileSystemRepresentation, O_RDONLY);
+    if (inFd < 0) {
+        perr(@"cpfile open src '%@' failed: %s", src, strerror(errno));
         return 3;
     }
-    [fm setAttributes:@{NSFilePosixPermissions: @0755} ofItemAtPath:dst error:nil];
+    unlink(dst.fileSystemRepresentation);
+    int outFd = open(dst.fileSystemRepresentation, O_WRONLY | O_CREAT | O_TRUNC, 0755);
+    if (outFd < 0) {
+        int saved = errno;
+        close(inFd);
+        perr(@"cpfile open dst '%@' failed: %s", dst, strerror(saved));
+        return 3;
+    }
+    char buf[1024 * 1024];
+    ssize_t n = 0;
+    while ((n = read(inFd, buf, sizeof(buf))) > 0) {
+        char *p = buf;
+        ssize_t remaining = n;
+        while (remaining > 0) {
+            ssize_t w = write(outFd, p, (size_t)remaining);
+            if (w < 0) {
+                int saved = errno;
+                close(inFd);
+                close(outFd);
+                unlink(dst.fileSystemRepresentation);
+                perr(@"cpfile write dst '%@' failed: %s", dst, strerror(saved));
+                return 3;
+            }
+            remaining -= w;
+            p += w;
+        }
+    }
+    if (n < 0) {
+        int saved = errno;
+        close(inFd);
+        close(outFd);
+        unlink(dst.fileSystemRepresentation);
+        perr(@"cpfile read src '%@' failed: %s", src, strerror(saved));
+        return 3;
+    }
+    fchmod(outFd, 0755);
+    fsync(outFd);
+    close(inFd);
+    close(outFd);
     return 0;
 }
 
