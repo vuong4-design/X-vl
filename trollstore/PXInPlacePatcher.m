@@ -5,6 +5,7 @@
 #import "PXMachOInjector.h"
 #import "PXRootHelper.h"
 #import "PXRuntimeSnapshot.h"
+#import "common/PXProcessKiller.h"
 
 #import <objc/message.h>
 
@@ -301,6 +302,7 @@ static BOOL PXIPRunRoot(NSArray<NSString *> *argv, NSString **outError) {
         result[@"state"] = state ?: @{};
         NSString *patchedCopy = state[@"patchedCopy"];
         NSString *executablePath = state[@"executablePath"];
+        NSString *executableName = state[@"executableName"];
         if (!patchedCopy.length || ![[NSFileManager defaultManager] fileExistsAtPath:patchedCopy]) {
             result[@"ok"] = @"NO";
             result[@"error"] = @"No patched copy found. Run Patch Prepared Copy first.";
@@ -310,6 +312,12 @@ static BOOL PXIPRunRoot(NSArray<NSString *> *argv, NSString **outError) {
             result[@"ok"] = @"NO";
             result[@"error"] = @"Missing executable path in state";
             return result;
+        }
+
+        if (executableName.length) {
+            [PXDiagnostics log:@"[patch] killing target process before install name=%@", executableName];
+            PXKillallTermThenKill(executableName, 0.5);
+            PXWaitForProcessesToExit(@[executableName], 2.0);
         }
 
         NSString *rootErr = nil;
@@ -333,6 +341,9 @@ static BOOL PXIPRunRoot(NSArray<NSString *> *argv, NSString **outError) {
         BOOL opened = PXIPOpenBundleID(bundleID);
         result[@"openApplication"] = opened ? @"YES" : @"NO";
         result[@"targetMarkerPath"] = targetMarkerPath ?: @"";
+        if (executableName.length) {
+            result[@"processRunningAfterOpen"] = PXProcessIsRunning(executableName) ? @"YES" : @"NO";
+        }
 
         NSDictionary *marker = nil;
         NSTimeInterval deadline = [[NSDate date] timeIntervalSince1970] + 6.0;
