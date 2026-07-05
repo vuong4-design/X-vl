@@ -3,6 +3,7 @@
 #import "PXInPlacePatcher.h"
 #import "PXDiagnostics.h"
 #import "PXMachOInjector.h"
+#import "PXRootHelper.h"
 #import "PXRuntimeSnapshot.h"
 
 #import <objc/message.h>
@@ -110,6 +111,18 @@ static BOOL PXIPWriteState(NSString *bundleID, NSDictionary *state) {
     return [state writeToFile:PXIPStatePath(bundleID) atomically:YES];
 }
 
+static BOOL PXIPRunRoot(NSArray<NSString *> *argv, NSString **outError) {
+    int exitCode = -999;
+    NSString *stdOut = nil;
+    NSString *stdErr = nil;
+    NSError *err = nil;
+    BOOL ok = [[PXRootHelper sharedHelper] runAsRoot:argv exitCode:&exitCode stdOut:&stdOut stdErr:&stdErr error:&err];
+    if (!ok && outError) {
+        *outError = err.localizedDescription ?: stdErr ?: [NSString stringWithFormat:@"root helper failed exit=%d", exitCode];
+    }
+    return ok;
+}
+
 @implementation PXInPlacePatcher
 
 + (NSDictionary<NSString *,id> *)prepareBundleID:(NSString *)bundleID {
@@ -172,17 +185,20 @@ static BOOL PXIPWriteState(NSString *bundleID, NSDictionary *state) {
     }
 
     [PXDiagnostics log:@"[patch] prepare create frameworksPath=%@", frameworksPath ?: @""];
-    [fm createDirectoryAtPath:frameworksPath withIntermediateDirectories:YES attributes:nil error:nil];
-    NSString *targetDylib = [frameworksPath stringByAppendingPathComponent:@"ProjectXInject.dylib"];
-    [fm removeItemAtPath:targetDylib error:nil];
-    NSError *dylibCopyErr = nil;
-    [PXDiagnostics log:@"[patch] prepare copying dylib source=%@ target=%@", [PXRuntimeSnapshot bundledInjectDylibPath] ?: @"", targetDylib ?: @""];
-    if (![fm copyItemAtPath:[PXRuntimeSnapshot bundledInjectDylibPath] toPath:targetDylib error:&dylibCopyErr]) {
+    NSString *rootErr = nil;
+    if (!PXIPRunRoot(@[@"mkdir", frameworksPath], &rootErr)) {
         result[@"ok"] = @"NO";
-        result[@"error"] = dylibCopyErr.localizedDescription ?: @"Failed to copy ProjectXInject.dylib into target bundle";
+        result[@"error"] = rootErr ?: @"Failed to create Frameworks directory via root helper";
         return result;
     }
-    [fm setAttributes:@{NSFilePosixPermissions: @0755} ofItemAtPath:targetDylib error:nil];
+    NSString *targetDylib = [frameworksPath stringByAppendingPathComponent:@"ProjectXInject.dylib"];
+    [PXDiagnostics log:@"[patch] prepare copying dylib source=%@ target=%@", [PXRuntimeSnapshot bundledInjectDylibPath] ?: @"", targetDylib ?: @""];
+    rootErr = nil;
+    if (!PXIPRunRoot(@[@"cpfile", [PXRuntimeSnapshot bundledInjectDylibPath], targetDylib], &rootErr)) {
+        result[@"ok"] = @"NO";
+        result[@"error"] = rootErr ?: @"Failed to copy ProjectXInject.dylib into target bundle";
+        return result;
+    }
 
     NSMutableDictionary *state = [NSMutableDictionary dictionaryWithDictionary:resolved];
     state[@"mode"] = @"inplace-prepared";
@@ -279,15 +295,18 @@ static BOOL PXIPWriteState(NSString *bundleID, NSDictionary *state) {
         result[@"error"] = @"No backup executable found for this bundle";
         return result;
     }
-    [fm removeItemAtPath:executablePath error:nil];
-    NSError *copyErr = nil;
-    if (![fm copyItemAtPath:backupExecutable toPath:executablePath error:&copyErr]) {
+    NSString *rootErr = nil;
+    if (!PXIPRunRoot(@[@"cpfile", backupExecutable, executablePath], &rootErr)) {
         result[@"ok"] = @"NO";
-        result[@"error"] = copyErr.localizedDescription ?: @"Failed to restore executable";
+        result[@"error"] = rootErr ?: @"Failed to restore executable";
         return result;
     }
-    [fm setAttributes:@{NSFilePosixPermissions: @0755} ofItemAtPath:executablePath error:nil];
-    if (targetDylib.length) [fm removeItemAtPath:targetDylib error:nil];
+    if (targetDylib.length) {
+        rootErr = nil;
+        if (!PXIPRunRoot(@[@"rm", targetDylib], &rootErr)) {
+            [PXDiagnostics log:@"[patch] restore warning remove dylib failed=%@", rootErr ?: @""];
+        }
+    }
     [fm removeItemAtPath:PXIPStatePath(bundleID) error:nil];
     result[@"ok"] = @"YES";
     result[@"error"] = @"";

@@ -12,6 +12,8 @@
 //   weaponx_root_helper chmod   <octal-mode> <absolute-path> [-R]
 //   weaponx_root_helper chflags clear <absolute-path> [-R]
 //   weaponx_root_helper mv      <src-absolute-path> <dst-absolute-path>
+//   weaponx_root_helper mkdir   <absolute-path>
+//   weaponx_root_helper cpfile  <src-absolute-path> <dst-absolute-path>
 //   weaponx_root_helper dyldlaunch <executable> <dylib> <home> <bundleID> [logPath]
 //
 // Exit codes:
@@ -272,6 +274,36 @@ static int op_mv(NSString *src, NSString *dst) {
     return 0;
 }
 
+static int op_mkdir(NSString *path) {
+    if (!pathIsAllowed(path)) { perr(@"mkdir: path not allowed: %@", path); return 2; }
+    NSError *err = nil;
+    if (![[NSFileManager defaultManager] createDirectoryAtPath:path withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions: @0755} error:&err]) {
+        perr(@"mkdir '%@' failed: %@", path, err.localizedDescription ?: @"unknown error");
+        return 3;
+    }
+    return 0;
+}
+
+static int op_cpfile(NSString *src, NSString *dst) {
+    if (!pathIsAllowed(src)) { perr(@"cpfile: src not allowed: %@", src); return 2; }
+    if (!pathIsAllowed(dst)) { perr(@"cpfile: dst not allowed: %@", dst); return 2; }
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *parent = [dst stringByDeletingLastPathComponent];
+    NSError *err = nil;
+    if (parent.length && ![fm createDirectoryAtPath:parent withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions: @0755} error:&err]) {
+        perr(@"cpfile mkdir parent '%@' failed: %@", parent, err.localizedDescription ?: @"unknown error");
+        return 3;
+    }
+    [fm removeItemAtPath:dst error:nil];
+    err = nil;
+    if (![fm copyItemAtPath:src toPath:dst error:&err]) {
+        perr(@"cpfile '%@' -> '%@' failed: %@", src, dst, err.localizedDescription ?: @"unknown error");
+        return 3;
+    }
+    [fm setAttributes:@{NSFilePosixPermissions: @0755} ofItemAtPath:dst error:nil];
+    return 0;
+}
+
 static int op_dyldlaunch(NSString *executable, NSString *dylib, NSString *home, NSString *bundleID, NSString *logPath) {
     if (!pathIsAllowed(executable)) { perr(@"dyldlaunch: executable not allowed: %@", executable); return 2; }
     if (!pathIsAllowed(dylib)) { perr(@"dyldlaunch: dylib not allowed: %@", dylib); return 2; }
@@ -400,6 +432,14 @@ int main(int argc, char *argv[]) {
         if ([op isEqualToString:@"mv"]) {
             if (argc != 4) { perr(@"mv: expects <src> <dst>"); return 2; }
             return op_mv(@(argv[2]), @(argv[3]));
+        }
+        if ([op isEqualToString:@"mkdir"]) {
+            if (argc != 3) { perr(@"mkdir: expects <path>"); return 2; }
+            return op_mkdir(@(argv[2]));
+        }
+        if ([op isEqualToString:@"cpfile"]) {
+            if (argc != 4) { perr(@"cpfile: expects <src> <dst>"); return 2; }
+            return op_cpfile(@(argv[2]), @(argv[3]));
         }
         if ([op isEqualToString:@"dyldlaunch"]) {
             if (argc != 6 && argc != 7) { perr(@"dyldlaunch: expects <executable> <dylib> <home> <bundleID> [logPath]"); return 2; }
