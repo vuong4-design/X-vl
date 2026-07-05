@@ -421,7 +421,7 @@ static NSDictionary<NSString *, id> *PXIPTrySignPath(NSString *path, NSString *e
 
         NSString *rootErr = nil;
         [PXDiagnostics log:@"[patch] installing patched copy source=%@ executable=%@", patchedCopy ?: @"", executablePath ?: @""];
-        if (!PXIPRunRoot(@[@"cpfile", patchedCopy, executablePath], &rootErr)) {
+        if (!PXIPRunRoot(@[@"replacefile", patchedCopy, executablePath], &rootErr)) {
             result[@"ok"] = @"NO";
             result[@"error"] = rootErr ?: @"Failed to install patched executable";
             return result;
@@ -493,7 +493,7 @@ static NSDictionary<NSString *, id> *PXIPTrySignPath(NSString *path, NSString *e
         return result;
     }
     NSString *rootErr = nil;
-    if (!PXIPRunRoot(@[@"cpfile", backupExecutable, executablePath], &rootErr)) {
+    if (!PXIPRunRoot(@[@"replacefile", backupExecutable, executablePath], &rootErr)) {
         result[@"ok"] = @"NO";
         result[@"error"] = rootErr ?: @"Failed to restore executable";
         return result;

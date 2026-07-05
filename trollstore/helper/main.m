@@ -14,6 +14,7 @@
 //   weaponx_root_helper mv      <src-absolute-path> <dst-absolute-path>
 //   weaponx_root_helper mkdir   <absolute-path>
 //   weaponx_root_helper cpfile  <src-absolute-path> <dst-absolute-path>
+//   weaponx_root_helper replacefile <src-absolute-path> <dst-absolute-path>
 //   weaponx_root_helper ldidprobe
 //   weaponx_root_helper ldidsign <binary-absolute-path> [entitlements-plist]
 //   weaponx_root_helper dyldlaunch <executable> <dylib> <home> <bundleID> [logPath]
@@ -344,6 +345,154 @@ static int op_cpfile(NSString *src, NSString *dst) {
     return 0;
 }
 
+static int copy_regular_file(NSString *src, NSString *dst, mode_t mode) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *parent = [dst stringByDeletingLastPathComponent];
+    NSError *err = nil;
+    if (parent.length && ![fm createDirectoryAtPath:parent withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions: @0755} error:&err]) {
+        perr(@"copy mkdir parent '%@' failed: %@", parent, err.localizedDescription ?: @"unknown error");
+        return 3;
+    }
+    int inFd = open(src.fileSystemRepresentation, O_RDONLY);
+    if (inFd < 0) {
+        perr(@"copy open src '%@' failed: %s", src, strerror(errno));
+        return 3;
+    }
+    unlink(dst.fileSystemRepresentation);
+    int outFd = open(dst.fileSystemRepresentation, O_WRONLY | O_CREAT | O_EXCL, mode);
+    if (outFd < 0) {
+        int saved = errno;
+        close(inFd);
+        perr(@"copy open dst '%@' failed: %s", dst, strerror(saved));
+        return 3;
+    }
+    char buf[1024 * 1024];
+    ssize_t n = 0;
+    while ((n = read(inFd, buf, sizeof(buf))) > 0) {
+        char *p = buf;
+        ssize_t remaining = n;
+        while (remaining > 0) {
+            ssize_t w = write(outFd, p, (size_t)remaining);
+            if (w < 0) {
+                int saved = errno;
+                close(inFd);
+                close(outFd);
+                unlink(dst.fileSystemRepresentation);
+                perr(@"copy write dst '%@' failed: %s", dst, strerror(saved));
+                return 3;
+            }
+            remaining -= w;
+            p += w;
+        }
+    }
+    if (n < 0) {
+        int saved = errno;
+        close(inFd);
+        close(outFd);
+        unlink(dst.fileSystemRepresentation);
+        perr(@"copy read src '%@' failed: %s", src, strerror(saved));
+        return 3;
+    }
+    fchmod(outFd, mode);
+    fsync(outFd);
+    close(inFd);
+    close(outFd);
+    return 0;
+}
+
+static BOOL files_equal(NSString *a, NSString *b, NSString **reason) {
+    int fdA = open(a.fileSystemRepresentation, O_RDONLY);
+    if (fdA < 0) {
+        if (reason) *reason = [NSString stringWithFormat:@"open source failed: %s", strerror(errno)];
+        return NO;
+    }
+    int fdB = open(b.fileSystemRepresentation, O_RDONLY);
+    if (fdB < 0) {
+        if (reason) *reason = [NSString stringWithFormat:@"open destination failed: %s", strerror(errno)];
+        close(fdA);
+        return NO;
+    }
+    struct stat stA;
+    struct stat stB;
+    if (fstat(fdA, &stA) != 0 || fstat(fdB, &stB) != 0) {
+        if (reason) *reason = [NSString stringWithFormat:@"fstat failed: %s", strerror(errno)];
+        close(fdA);
+        close(fdB);
+        return NO;
+    }
+    if (stA.st_size != stB.st_size) {
+        if (reason) *reason = [NSString stringWithFormat:@"size mismatch src=%lld dst=%lld", (long long)stA.st_size, (long long)stB.st_size];
+        close(fdA);
+        close(fdB);
+        return NO;
+    }
+    char bufA[1024 * 1024];
+    char bufB[1024 * 1024];
+    off_t offset = 0;
+    for (;;) {
+        ssize_t nA = read(fdA, bufA, sizeof(bufA));
+        ssize_t nB = read(fdB, bufB, sizeof(bufB));
+        if (nA < 0 || nB < 0) {
+            if (reason) *reason = [NSString stringWithFormat:@"read compare failed at %lld: %s", (long long)offset, strerror(errno)];
+            close(fdA);
+            close(fdB);
+            return NO;
+        }
+        if (nA != nB) {
+            if (reason) *reason = [NSString stringWithFormat:@"read length mismatch at %lld", (long long)offset];
+            close(fdA);
+            close(fdB);
+            return NO;
+        }
+        if (nA == 0) break;
+        if (memcmp(bufA, bufB, (size_t)nA) != 0) {
+            if (reason) *reason = [NSString stringWithFormat:@"byte mismatch near offset %lld", (long long)offset];
+            close(fdA);
+            close(fdB);
+            return NO;
+        }
+        offset += nA;
+    }
+    close(fdA);
+    close(fdB);
+    return YES;
+}
+
+static int op_replacefile(NSString *src, NSString *dst) {
+    if (!pathIsAllowed(src)) { perr(@"replacefile: src not allowed: %@", src); return 2; }
+    if (!pathIsAllowed(dst)) { perr(@"replacefile: dst not allowed: %@", dst); return 2; }
+    struct stat srcSt;
+    if (stat(src.fileSystemRepresentation, &srcSt) != 0) {
+        perr(@"replacefile stat src '%@' failed: %s", src, strerror(errno));
+        return 3;
+    }
+    mode_t mode = srcSt.st_mode & 07777;
+    if (!mode) mode = 0755;
+    NSString *parent = [dst stringByDeletingLastPathComponent];
+    NSString *tmp = [parent stringByAppendingPathComponent:[NSString stringWithFormat:@".%@.projectx.%d.tmp", dst.lastPathComponent, getpid()]];
+    unlink(tmp.fileSystemRepresentation);
+    int rc = copy_regular_file(src, tmp, mode);
+    if (rc != 0) return rc;
+    if (rename(tmp.fileSystemRepresentation, dst.fileSystemRepresentation) != 0) {
+        int saved = errno;
+        unlink(tmp.fileSystemRepresentation);
+        perr(@"replacefile rename '%@' -> '%@' failed: %s", tmp, dst, strerror(saved));
+        return 3;
+    }
+    int dirFd = open(parent.fileSystemRepresentation, O_RDONLY);
+    if (dirFd >= 0) {
+        fsync(dirFd);
+        close(dirFd);
+    }
+    NSString *reason = nil;
+    if (!files_equal(src, dst, &reason)) {
+        perr(@"replacefile verification failed: %@", reason ?: @"unknown mismatch");
+        return 3;
+    }
+    printf("replaced=%s\nverified=YES\n", dst.UTF8String);
+    return 0;
+}
+
 static NSString *find_ldid(void) {
     NSArray<NSString *> *candidates = @[
         @"/usr/bin/ldid",
@@ -541,6 +690,10 @@ int main(int argc, char *argv[]) {
         if ([op isEqualToString:@"cpfile"]) {
             if (argc != 4) { perr(@"cpfile: expects <src> <dst>"); return 2; }
             return op_cpfile(@(argv[2]), @(argv[3]));
+        }
+        if ([op isEqualToString:@"replacefile"]) {
+            if (argc != 4) { perr(@"replacefile: expects <src> <dst>"); return 2; }
+            return op_replacefile(@(argv[2]), @(argv[3]));
         }
         if ([op isEqualToString:@"ldidprobe"]) {
             if (argc != 2) { perr(@"ldidprobe: expects no args"); return 2; }
