@@ -40,6 +40,7 @@ ProjectXTroll_FILES = \
 	$(TROLLSTORE_DIR)/PXEntitlements.m \
 	$(TROLLSTORE_DIR)/PXFileOps.m \
 	$(TROLLSTORE_DIR)/PXInPlacePatcher.m \
+	$(TROLLSTORE_DIR)/PXMachOInjector.m \
 	$(TROLLSTORE_DIR)/PXRootHelper.m \
 	$(TROLLSTORE_DIR)/PXRuntimeSnapshot.m \
 	$(TROLLSTORE_DIR)/TSUtil.m

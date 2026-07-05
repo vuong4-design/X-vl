@@ -2,6 +2,7 @@
 
 #import "PXInPlacePatcher.h"
 #import "PXDiagnostics.h"
+#import "PXMachOInjector.h"
 #import "PXRuntimeSnapshot.h"
 
 #import <objc/message.h>
@@ -214,6 +215,54 @@ static BOOL PXIPWriteState(NSString *bundleID, NSDictionary *state) {
     }
 }
 
++ (NSDictionary<NSString *,id> *)patchPreparedCopyBundleID:(NSString *)bundleID {
+    NSMutableDictionary *result = [NSMutableDictionary dictionary];
+    result[@"bundleID"] = bundleID ?: @"";
+    [PXDiagnostics log:@"[patch] patch prepared copy requested bundleID=%@", bundleID ?: @""];
+    @try {
+        NSDictionary *state = PXIPReadState(bundleID);
+        result[@"state"] = state ?: @{};
+        NSString *backupExecutable = state[@"backupExecutable"];
+        NSString *backupDir = state[@"backupDir"];
+        NSString *dylibLoadPath = state[@"dylibLoadPath"] ?: @"@executable_path/Frameworks/ProjectXInject.dylib";
+        if (!backupExecutable.length || ![[NSFileManager defaultManager] fileExistsAtPath:backupExecutable]) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = @"No prepared backup executable found. Run Prepare In-Place first.";
+            return result;
+        }
+        NSString *patchedCopy = [backupDir stringByAppendingPathComponent:[[backupExecutable lastPathComponent] stringByAppendingString:@".patched"]];
+        [[NSFileManager defaultManager] removeItemAtPath:patchedCopy error:nil];
+        NSError *copyErr = nil;
+        if (![[NSFileManager defaultManager] copyItemAtPath:backupExecutable toPath:patchedCopy error:&copyErr]) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = copyErr.localizedDescription ?: @"Failed to create patched copy";
+            return result;
+        }
+        [[NSFileManager defaultManager] setAttributes:@{NSFilePosixPermissions: @0755} ofItemAtPath:patchedCopy error:nil];
+        NSError *patchErr = nil;
+        [PXDiagnostics log:@"[patch] patching prepared copy=%@ loadPath=%@", patchedCopy ?: @"", dylibLoadPath ?: @""];
+        BOOL patched = [PXMachOInjector insertDylibLoadCommand:dylibLoadPath intoMachOAtPath:patchedCopy error:&patchErr];
+        result[@"ok"] = patched ? @"YES" : @"NO";
+        result[@"error"] = patched ? @"" : (patchErr.localizedDescription ?: @"Mach-O patch failed");
+        result[@"patchedCopy"] = patchedCopy ?: @"";
+        result[@"dylibLoadPath"] = dylibLoadPath ?: @"";
+        if (patched) {
+            NSMutableDictionary *newState = [NSMutableDictionary dictionaryWithDictionary:state ?: @{}];
+            newState[@"patchedCopy"] = patchedCopy ?: @"";
+            newState[@"patchedCopyReady"] = @"YES";
+            newState[@"patchedCopyPreparedAt"] = @([[NSDate date] timeIntervalSince1970]);
+            PXIPWriteState(bundleID, newState);
+        }
+        [PXDiagnostics log:@"[patch] patch prepared copy result=%@", result];
+        return result;
+    } @catch (NSException *ex) {
+        result[@"ok"] = @"NO";
+        result[@"error"] = [NSString stringWithFormat:@"Exception during patch prepared copy: %@ %@", ex.name ?: @"", ex.reason ?: @""];
+        [PXDiagnostics log:@"[patch] patch prepared copy exception=%@", result[@"error"]];
+        return result;
+    }
+}
+
 + (NSDictionary<NSString *,id> *)restoreBundleID:(NSString *)bundleID {
     NSMutableDictionary *result = [NSMutableDictionary dictionary];
     result[@"bundleID"] = bundleID ?: @"";
@@ -262,6 +311,8 @@ static BOOL PXIPWriteState(NSString *bundleID, NSDictionary *state) {
     result[@"state"] = state ?: @{};
     NSString *targetDylib = state[@"targetDylib"];
     result[@"targetDylibExists"] = (targetDylib.length && [fm fileExistsAtPath:targetDylib]) ? @"YES" : @"NO";
+    NSString *patchedCopy = state[@"patchedCopy"];
+    result[@"patchedCopyExists"] = (patchedCopy.length && [fm fileExistsAtPath:patchedCopy]) ? @"YES" : @"NO";
     return result;
 }
 
