@@ -141,14 +141,17 @@ static BOOL PXCopyDylibToTargetContainer(NSString *sourceDylib, NSString *dataPa
     }
 
     NSString *markerPath = [dataPath stringByAppendingPathComponent:@"Library/ProjectX/loaded_marker.plist"];
+    NSString *dyldLogPath = [dataPath stringByAppendingPathComponent:@"Library/ProjectX/dyldlaunch.log"];
     [[NSFileManager defaultManager] removeItemAtPath:markerPath error:nil];
+    [[NSFileManager defaultManager] removeItemAtPath:dyldLogPath error:nil];
     info[@"markerPath"] = markerPath ?: @"";
+    info[@"dyldLogPath"] = dyldLogPath ?: @"";
 
     int exitCode = -999;
     NSString *stdOut = nil;
     NSString *stdErr = nil;
     NSError *rootErr = nil;
-    BOOL launched = [[PXRootHelper sharedHelper] runAsRoot:@[@"dyldlaunch", executablePath, targetDylib, dataPath, bundleID]
+    BOOL launched = [[PXRootHelper sharedHelper] runAsRoot:@[@"dyldlaunch", executablePath, targetDylib, dataPath, bundleID, dyldLogPath]
                                               exitCode:&exitCode
                                                 stdOut:&stdOut
                                                 stdErr:&stdErr
@@ -174,6 +177,10 @@ static BOOL PXCopyDylibToTargetContainer(NSString *sourceDylib, NSString *dataPa
     }
     info[@"markerFound"] = marker.count ? @"YES" : @"NO";
     info[@"marker"] = marker ?: @{};
+    NSData *dyldLogData = [NSData dataWithContentsOfFile:dyldLogPath];
+    NSString *dyldLog = dyldLogData.length ? [[NSString alloc] initWithData:dyldLogData encoding:NSUTF8StringEncoding] : @"";
+    if (dyldLog.length > 12000) dyldLog = [dyldLog substringFromIndex:dyldLog.length - 12000];
+    info[@"dyldLog"] = dyldLog ?: @"";
     info[@"ok"] = marker.count ? @"YES" : @"NO";
     if (!marker.count) info[@"error"] = @"DYLD launch returned but ProjectXInject marker was not written";
     [PXDiagnostics log:@"[dyld] launch result=%@", info];

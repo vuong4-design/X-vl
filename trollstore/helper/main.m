@@ -12,7 +12,7 @@
 //   weaponx_root_helper chmod   <octal-mode> <absolute-path> [-R]
 //   weaponx_root_helper chflags clear <absolute-path> [-R]
 //   weaponx_root_helper mv      <src-absolute-path> <dst-absolute-path>
-//   weaponx_root_helper dyldlaunch <executable> <dylib> <home> <bundleID>
+//   weaponx_root_helper dyldlaunch <executable> <dylib> <home> <bundleID> [logPath]
 //
 // Exit codes:
 //   0  success
@@ -257,11 +257,12 @@ static int op_mv(NSString *src, NSString *dst) {
     return 0;
 }
 
-static int op_dyldlaunch(NSString *executable, NSString *dylib, NSString *home, NSString *bundleID) {
+static int op_dyldlaunch(NSString *executable, NSString *dylib, NSString *home, NSString *bundleID, NSString *logPath) {
     if (!pathIsAllowed(executable)) { perr(@"dyldlaunch: executable not allowed: %@", executable); return 2; }
     if (!pathIsAllowed(dylib)) { perr(@"dyldlaunch: dylib not allowed: %@", dylib); return 2; }
     NSString *homeForAllow = [home hasSuffix:@"/"] ? home : [home stringByAppendingString:@"/"];
     if (!pathIsAllowed(homeForAllow)) { perr(@"dyldlaunch: home not allowed: %@", home); return 2; }
+    if (logPath.length && !pathIsAllowed(logPath)) { perr(@"dyldlaunch: log path not allowed: %@", logPath); return 2; }
     if (bundleID.length == 0 || [bundleID containsString:@"/"]) { perr(@"dyldlaunch: invalid bundleID: %@", bundleID); return 2; }
     if (access(executable.fileSystemRepresentation, X_OK) != 0) { perr(@"dyldlaunch: executable not executable: %@ (%s)", executable, strerror(errno)); return 3; }
     if (access(dylib.fileSystemRepresentation, R_OK) != 0) { perr(@"dyldlaunch: dylib not readable: %@ (%s)", dylib, strerror(errno)); return 3; }
@@ -276,6 +277,8 @@ static int op_dyldlaunch(NSString *executable, NSString *dylib, NSString *home, 
     NSString *tmpEnv = [@"TMPDIR=" stringByAppendingString:[tmpDir stringByAppendingString:@"/"]];
     NSString *bidEnv = [@"PROJECTX_TARGET_BUNDLE_ID=" stringByAppendingString:bundleID];
     NSString *flagEnv = @"PROJECTX_DYLD_LAUNCH=1";
+    NSString *printLibs = @"DYLD_PRINT_LIBRARIES=1";
+    NSString *printInit = @"DYLD_PRINT_INITIALIZERS=1";
     const char *envp[] = {
         dyld.UTF8String,
         homeEnv.UTF8String,
@@ -283,8 +286,24 @@ static int op_dyldlaunch(NSString *executable, NSString *dylib, NSString *home, 
         tmpEnv.UTF8String,
         bidEnv.UTF8String,
         flagEnv.UTF8String,
+        printLibs.UTF8String,
+        printInit.UTF8String,
         NULL
     };
+
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    int logFd = -1;
+    if (logPath.length) {
+        unlink(logPath.fileSystemRepresentation);
+        logFd = open(logPath.fileSystemRepresentation, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+        if (logFd >= 0) {
+            dprintf(logFd, "ProjectX dyldlaunch\nexecutable=%s\ndylib=%s\nhome=%s\nbundleID=%s\n", executable.UTF8String, dylib.UTF8String, home.UTF8String, bundleID.UTF8String);
+            posix_spawn_file_actions_adddup2(&actions, logFd, STDOUT_FILENO);
+            posix_spawn_file_actions_adddup2(&actions, logFd, STDERR_FILENO);
+            posix_spawn_file_actions_addclose(&actions, logFd);
+        }
+    }
 
     posix_spawnattr_t attr;
     posix_spawnattr_init(&attr);
@@ -293,13 +312,31 @@ static int op_dyldlaunch(NSString *executable, NSString *dylib, NSString *home, 
     posix_spawnattr_set_persona_gid_np(&attr, 501);
 
     pid_t pid = 0;
-    int rc = posix_spawn(&pid, executable.fileSystemRepresentation, NULL, &attr, (char *const *)argv, (char *const *)envp);
+    int rc = posix_spawn(&pid, executable.fileSystemRepresentation, &actions, &attr, (char *const *)argv, (char *const *)envp);
     posix_spawnattr_destroy(&attr);
+    posix_spawn_file_actions_destroy(&actions);
+    if (logFd >= 0) close(logFd);
     if (rc != 0) {
         perr(@"dyldlaunch: posix_spawn failed executable=%@ rc=%d (%s)", executable, rc, strerror(rc));
         return 3;
     }
     printf("pid=%d\n", pid);
+    usleep(1000 * 1000);
+    int status = 0;
+    pid_t waitResult = waitpid(pid, &status, WNOHANG);
+    if (waitResult == 0) {
+        printf("child_alive_after_1s=YES\n");
+    } else if (waitResult == pid) {
+        if (WIFEXITED(status)) {
+            printf("child_exited_after_1s=YES exit=%d\n", WEXITSTATUS(status));
+        } else if (WIFSIGNALED(status)) {
+            printf("child_signaled_after_1s=YES signal=%d\n", WTERMSIG(status));
+        } else {
+            printf("child_status_after_1s=%d\n", status);
+        }
+    } else {
+        printf("waitpid_after_1s_failed=%s\n", strerror(errno));
+    }
     return 0;
 }
 
@@ -337,8 +374,9 @@ int main(int argc, char *argv[]) {
             return op_mv(@(argv[2]), @(argv[3]));
         }
         if ([op isEqualToString:@"dyldlaunch"]) {
-            if (argc != 6) { perr(@"dyldlaunch: expects <executable> <dylib> <home> <bundleID>"); return 2; }
-            return op_dyldlaunch(@(argv[2]), @(argv[3]), @(argv[4]), @(argv[5]));
+            if (argc != 6 && argc != 7) { perr(@"dyldlaunch: expects <executable> <dylib> <home> <bundleID> [logPath]"); return 2; }
+            NSString *logPath = argc == 7 ? @(argv[6]) : nil;
+            return op_dyldlaunch(@(argv[2]), @(argv[3]), @(argv[4]), @(argv[5]), logPath);
         }
 
         perr(@"unknown op: %@", op);
