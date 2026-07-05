@@ -3,6 +3,7 @@
 #import "PXDiagnostics.h"
 #import "PXDYLDLauncher.h"
 #import "PXEntitlements.h"
+#import "PXInPlacePatcher.h"
 #import "PXRootHelper.h"
 #import "PXRuntimeSnapshot.h"
 #import "PXShellRouter.h"
@@ -240,6 +241,24 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
     [self log:@"[dyld] diagnostic launch bundleID=%@", targetBundleID];
     return [PXDYLDLauncher launchBundleID:targetBundleID timeout:6.0];
+}
+
++ (NSDictionary<NSString *,id> *)prepareInPlaceBundleID:(NSString *)bundleID {
+    NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
+    [self log:@"[patch] diagnostic prepare bundleID=%@", targetBundleID];
+    return [PXInPlacePatcher prepareBundleID:targetBundleID];
+}
+
++ (NSDictionary<NSString *,id> *)restoreInPlaceBundleID:(NSString *)bundleID {
+    NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
+    [self log:@"[patch] diagnostic restore bundleID=%@", targetBundleID];
+    return [PXInPlacePatcher restoreBundleID:targetBundleID];
+}
+
++ (NSDictionary<NSString *,id> *)inPlaceStatusBundleID:(NSString *)bundleID {
+    NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
+    [self log:@"[patch] diagnostic status bundleID=%@", targetBundleID];
+    return [PXInPlacePatcher statusForBundleID:targetBundleID];
 }
 
 @end

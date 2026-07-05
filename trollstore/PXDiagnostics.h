@@ -17,6 +17,9 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSDictionary<NSString *, id> *)routerFixtureSelfTest;
 + (NSDictionary<NSString *, id> *)injectionSnapshotForBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)dyldLaunchBundleID:(NSString *)bundleID;
++ (NSDictionary<NSString *, id> *)prepareInPlaceBundleID:(NSString *)bundleID;
++ (NSDictionary<NSString *, id> *)restoreInPlaceBundleID:(NSString *)bundleID;
++ (NSDictionary<NSString *, id> *)inPlaceStatusBundleID:(NSString *)bundleID;
 
 @end
 

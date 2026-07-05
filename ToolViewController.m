@@ -551,6 +551,40 @@
         }]];
         [selfRef presentViewController:prompt animated:YES completion:nil];
     }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Prepare In-Place Injection" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        typeof(weakSelf) selfRef = weakSelf;
+        if (!selfRef) return;
+        UIAlertController *prompt = [UIAlertController alertControllerWithTitle:@"Prepare In-Place"
+                                                                        message:@"Backs up the executable and copies ProjectXInject.dylib into the target app. It does not patch load commands yet."
+                                                                 preferredStyle:UIAlertControllerStyleAlert];
+        [prompt addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+            textField.placeholder = @"com.finalwire.aida64";
+            textField.text = @"com.finalwire.aida64";
+            textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+            textField.autocorrectionType = UITextAutocorrectionTypeNo;
+        }];
+        [prompt addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+        [prompt addAction:[UIAlertAction actionWithTitle:@"Prepare" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action2) {
+            NSString *bundleID = prompt.textFields.firstObject.text ?: @"com.finalwire.aida64";
+            showResult(@"Prepare In-Place", [PXDiagnostics prepareInPlaceBundleID:bundleID]);
+        }]];
+        [selfRef presentViewController:prompt animated:YES completion:nil];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"In-Place Status" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        showResult(@"In-Place Status", [PXDiagnostics inPlaceStatusBundleID:@"com.finalwire.aida64"]);
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Restore In-Place Original" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
+        typeof(weakSelf) selfRef = weakSelf;
+        if (!selfRef) return;
+        UIAlertController *confirm = [UIAlertController alertControllerWithTitle:@"Restore Original"
+                                                                         message:@"Restores the backed up executable and removes ProjectXInject.dylib for AIDA64."
+                                                                  preferredStyle:UIAlertControllerStyleAlert];
+        [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+        [confirm addAction:[UIAlertAction actionWithTitle:@"Restore" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action2) {
+            showResult(@"Restore In-Place", [PXDiagnostics restoreInPlaceBundleID:@"com.finalwire.aida64"]);
+        }]];
+        [selfRef presentViewController:confirm animated:YES completion:nil];
+    }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Copy Log Tail" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         [UIPasteboard generalPasteboard].string = [PXDiagnostics readLogTailWithMaxBytes:20000];
     }]];
