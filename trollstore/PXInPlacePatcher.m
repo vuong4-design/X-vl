@@ -831,9 +831,16 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         result[@"rootInstalledCarrierInfoAfterChown"] = PXIPRunRootDetailed(@[@"fileinfo", carrierPath]);
         result[@"rootTargetDylibInfoAfterChown"] = PXIPRunRootDetailed(@[@"fileinfo", targetDylib]);
 
+        NSDictionary *finalCarrierContains = result[@"rootInstalledCarrierContainsLoadPathAfterToolCopy"] ?: result[@"rootInstalledCarrierContainsLoadPathAfterOverwrite"] ?: result[@"rootInstalledCarrierContainsLoadPath"] ?: @{};
+        NSDictionary *finalDylibInfo = result[@"rootTargetDylibInfoAfterChown"] ?: result[@"rootTargetDylibInfoAfterToolCopy"] ?: result[@"rootTargetDylibInfoAfterCopy"] ?: @{};
+        BOOL carrierVerified = [finalCarrierContains[@"ok"] isEqual:@"YES"];
+        BOOL dylibVerified = [finalDylibInfo[@"ok"] isEqual:@"YES"];
+        result[@"carrierInstallVerified"] = carrierVerified ? @"YES" : @"NO";
+        result[@"targetDylibInstallVerified"] = dylibVerified ? @"YES" : @"NO";
+
         NSMutableDictionary *state = [NSMutableDictionary dictionaryWithDictionary:PXIPReadState(bundleID) ?: @{}];
         [state addEntriesFromDictionary:@{
-            @"mode": @"framework-carrier-installed-unverified",
+            @"mode": (carrierVerified && dylibVerified) ? @"framework-carrier-installed" : @"framework-carrier-installed-unverified",
             @"bundleID": bundleID ?: @"",
             @"bundlePath": bundlePath ?: @"",
             @"executableName": executableName ?: @"",
@@ -848,6 +855,8 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
             @"dylibLoadPath": dylibLoadPath ?: @"",
             @"selectedCarrier": selected ?: @{},
             @"installedAt": @([[NSDate date] timeIntervalSince1970]),
+            @"loadCommandInserted": carrierVerified ? @"YES" : @"NO",
+            @"targetDylibInstalled": dylibVerified ? @"YES" : @"NO",
         }];
         PXIPWriteState(bundleID, state);
         result[@"state"] = state ?: @{};
@@ -855,7 +864,7 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         PXIPAddCodeSignatureOnlyStatus(result, @"targetDylib", targetDylib);
         result[@"ok"] = @"YES";
         result[@"error"] = @"";
-        result[@"note"] = @"Framework carrier patch attempted. Prefer rootInstalledCarrierContainsLoadPath/rootTargetDylibInfoAfterCopy over app-side status if app-side bundle view is stale. CoreTrust signing may still be required.";
+        result[@"note"] = (carrierVerified && dylibVerified) ? @"Framework carrier injection verified root-side. Launch the target app and check Injection Marker Status." : @"Framework carrier patch attempted. Prefer rootInstalledCarrierContainsLoadPath/rootTargetDylibInfoAfterCopy over app-side status if app-side bundle view is stale. CoreTrust signing may still be required.";
         [PXDiagnostics log:@"[carrier] patch result=%@", result];
         return result;
     } @catch (NSException *ex) {

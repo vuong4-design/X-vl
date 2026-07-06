@@ -237,6 +237,23 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     return info;
 }
 
++ (NSDictionary<NSString *,id> *)injectionMarkerStatusForBundleID:(NSString *)bundleID {
+    NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
+    [self log:@"[inject] marker status bundleID=%@", targetBundleID];
+    NSDictionary *runtimeStatus = [PXRuntimeSnapshot statusForBundleID:targetBundleID] ?: @{};
+    NSDictionary *patchStatus = [PXInPlacePatcher statusForBundleID:targetBundleID] ?: @{};
+    NSMutableDictionary *info = [NSMutableDictionary dictionary];
+    info[@"bundleID"] = targetBundleID ?: @"";
+    info[@"runtime"] = runtimeStatus;
+    info[@"patch"] = patchStatus;
+    info[@"markerExists"] = runtimeStatus[@"markerExists"] ?: @"NO";
+    info[@"markerPath"] = runtimeStatus[@"markerPath"] ?: @"";
+    info[@"targetDylibExists"] = patchStatus[@"targetDylibExists"] ?: @"";
+    info[@"installedCarrierHasLoadCommand"] = patchStatus[@"installedCarrierHasLoadCommand"] ?: @"";
+    [self log:@"[inject] marker status result=%@", info];
+    return info;
+}
+
 + (NSDictionary<NSString *,id> *)dyldLaunchBundleID:(NSString *)bundleID {
     NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
     [self log:@"[dyld] diagnostic launch bundleID=%@", targetBundleID];
