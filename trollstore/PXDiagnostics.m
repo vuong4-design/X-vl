@@ -237,6 +237,21 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     return info;
 }
 
++ (NSDictionary<NSString *,id> *)enableObjCHooksSnapshotForBundleID:(NSString *)bundleID {
+    NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
+    [self log:@"[inject] enabling objc hooks snapshot bundleID=%@", targetBundleID];
+    NSError *err = nil;
+    NSDictionary *snapshot = [PXRuntimeSnapshot exportSnapshotForBundleID:targetBundleID enableObjCHooks:YES error:&err];
+    NSDictionary *status = [PXRuntimeSnapshot statusForBundleID:targetBundleID];
+    NSMutableDictionary *info = [NSMutableDictionary dictionaryWithDictionary:status ?: @{}];
+    info[@"exportOK"] = snapshot ? @"YES" : @"NO";
+    info[@"exportError"] = err.localizedDescription ?: @"";
+    info[@"EnableObjCHooks"] = snapshot[@"EnableObjCHooks"] ?: @"";
+    info[@"note"] = @"ObjC hooks will be active on next target launch. Reopen the target app, then check Injection Marker Status.";
+    [self log:@"[inject] objc hooks snapshot status=%@", info];
+    return info;
+}
+
 + (NSDictionary<NSString *,id> *)injectionMarkerStatusForBundleID:(NSString *)bundleID {
     NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
     [self log:@"[inject] marker status bundleID=%@", targetBundleID];
@@ -247,7 +262,10 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     info[@"runtime"] = runtimeStatus;
     info[@"patch"] = patchStatus;
     info[@"markerExists"] = runtimeStatus[@"markerExists"] ?: @"NO";
+    info[@"targetMarkerExists"] = runtimeStatus[@"targetMarkerExists"] ?: @"NO";
+    info[@"injectionLoaded"] = ([runtimeStatus[@"markerExists"] isEqual:@"YES"] || [runtimeStatus[@"targetMarkerExists"] isEqual:@"YES"]) ? @"YES" : @"NO";
     info[@"markerPath"] = runtimeStatus[@"markerPath"] ?: @"";
+    info[@"targetMarkerPath"] = runtimeStatus[@"targetMarkerPath"] ?: @"";
     info[@"targetDylibExists"] = patchStatus[@"targetDylibExists"] ?: @"";
     info[@"installedCarrierHasLoadCommand"] = patchStatus[@"installedCarrierHasLoadCommand"] ?: @"";
     [self log:@"[inject] marker status result=%@", info];

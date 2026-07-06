@@ -34,6 +34,18 @@ static BOOL PXSnapshotBool(NSString *key, BOOL defaultValue) {
     return defaultValue;
 }
 
+static NSOperatingSystemVersion PXSnapshotOSVersion(void) {
+    NSOperatingSystemVersion fallback = {0, 0, 0};
+    NSString *version = PXSnapshotString(@"IOSVersion");
+    NSArray<NSString *> *parts = [version componentsSeparatedByString:@"."];
+    if (parts.count < 1) return fallback;
+    NSOperatingSystemVersion osVersion = {0, 0, 0};
+    osVersion.majorVersion = parts.count > 0 ? parts[0].integerValue : 0;
+    osVersion.minorVersion = parts.count > 1 ? parts[1].integerValue : 0;
+    osVersion.patchVersion = parts.count > 2 ? parts[2].integerValue : 0;
+    return osVersion;
+}
+
 static NSString *PXSafeBundleID(void) {
     NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
     return bid.length ? bid : [[NSProcessInfo processInfo] processName];
@@ -143,7 +155,9 @@ static NSString *(*orig_UIDevice_model)(id, SEL) = NULL;
 static NSString *(*orig_UIDevice_localizedModel)(id, SEL) = NULL;
 static NSString *(*orig_UIDevice_systemName)(id, SEL) = NULL;
 static NSString *(*orig_UIDevice_systemVersion)(id, SEL) = NULL;
+static NSUUID *(*orig_UIDevice_identifierForVendor)(id, SEL) = NULL;
 static NSString *(*orig_NSProcessInfo_operatingSystemVersionString)(id, SEL) = NULL;
+static NSOperatingSystemVersion (*orig_NSProcessInfo_operatingSystemVersion)(id, SEL) = NULL;
 
 static NSString *px_UIDevice_name(id self, SEL _cmd) {
     NSString *value = PXSnapshotString(@"DeviceName");
@@ -170,12 +184,24 @@ static NSString *px_UIDevice_systemVersion(id self, SEL _cmd) {
     return value ?: (orig_UIDevice_systemVersion ? orig_UIDevice_systemVersion(self, _cmd) : @"");
 }
 
+static NSUUID *px_UIDevice_identifierForVendor(id self, SEL _cmd) {
+    NSString *value = PXSnapshotString(@"IDFV");
+    NSUUID *uuid = value.length ? [[NSUUID alloc] initWithUUIDString:value] : nil;
+    return uuid ?: (orig_UIDevice_identifierForVendor ? orig_UIDevice_identifierForVendor(self, _cmd) : nil);
+}
+
 static NSString *px_NSProcessInfo_operatingSystemVersionString(id self, SEL _cmd) {
     NSString *version = PXSnapshotString(@"IOSVersion");
     NSString *build = PXSnapshotString(@"IOSBuild");
     if (version.length && build.length) return [NSString stringWithFormat:@"Version %@ (Build %@)", version, build];
     if (version.length) return [NSString stringWithFormat:@"Version %@", version];
     return orig_NSProcessInfo_operatingSystemVersionString ? orig_NSProcessInfo_operatingSystemVersionString(self, _cmd) : @"";
+}
+
+static NSOperatingSystemVersion px_NSProcessInfo_operatingSystemVersion(id self, SEL _cmd) {
+    NSOperatingSystemVersion version = PXSnapshotOSVersion();
+    if (version.majorVersion > 0) return version;
+    return orig_NSProcessInfo_operatingSystemVersion ? orig_NSProcessInfo_operatingSystemVersion(self, _cmd) : version;
 }
 
 static void PXInstallObjCHooks(void) {
@@ -185,9 +211,11 @@ static void PXInstallObjCHooks(void) {
     PXReplaceInstanceMethod(device, @selector(localizedModel), (IMP)px_UIDevice_localizedModel, (IMP *)&orig_UIDevice_localizedModel);
     PXReplaceInstanceMethod(device, @selector(systemName), (IMP)px_UIDevice_systemName, (IMP *)&orig_UIDevice_systemName);
     PXReplaceInstanceMethod(device, @selector(systemVersion), (IMP)px_UIDevice_systemVersion, (IMP *)&orig_UIDevice_systemVersion);
+    PXReplaceInstanceMethod(device, @selector(identifierForVendor), (IMP)px_UIDevice_identifierForVendor, (IMP *)&orig_UIDevice_identifierForVendor);
 
     Class processInfo = objc_getClass("NSProcessInfo");
     PXReplaceInstanceMethod(processInfo, @selector(operatingSystemVersionString), (IMP)px_NSProcessInfo_operatingSystemVersionString, (IMP *)&orig_NSProcessInfo_operatingSystemVersionString);
+    PXReplaceInstanceMethod(processInfo, @selector(operatingSystemVersion), (IMP)px_NSProcessInfo_operatingSystemVersion, (IMP *)&orig_NSProcessInfo_operatingSystemVersion);
 }
 
 __attribute__((constructor))

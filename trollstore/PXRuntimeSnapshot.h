@@ -15,6 +15,9 @@ extern NSString * const PXRuntimeSnapshotErrorDomain;
 
 + (nullable NSDictionary<NSString *, id> *)exportSnapshotForBundleID:(NSString *)bundleID
                                                                error:(NSError **)error;
++ (nullable NSDictionary<NSString *, id> *)exportSnapshotForBundleID:(NSString *)bundleID
+                                                     enableObjCHooks:(BOOL)enableObjCHooks
+                                                               error:(NSError **)error;
 + (NSDictionary<NSString *, id> *)statusForBundleID:(NSString *)bundleID;
 
 @end

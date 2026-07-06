@@ -591,6 +591,14 @@
             });
         });
     }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Enable ObjC Hooks Snapshot" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSDictionary *result = [PXDiagnostics enableObjCHooksSnapshotForBundleID:@"com.finalwire.aida64"];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                showResult(@"Enable ObjC Hooks", result);
+            });
+        });
+    }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Scan Framework Carriers" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             NSDictionary *result = [PXDiagnostics scanFrameworkCarriersBundleID:@"com.finalwire.aida64"];
