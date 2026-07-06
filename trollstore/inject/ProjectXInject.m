@@ -78,24 +78,6 @@ static BOOL PXCopyCStringToSysctlBuffer(NSString *value, void *oldp, size_t *old
     return YES;
 }
 
-static CFTypeRef PXCopyMGValueForKey(CFStringRef key) {
-    if (!key || !PXSnapshotBool(@"EnableCHooks", NO)) return NULL;
-    NSString *name = (__bridge NSString *)key;
-    NSString *value = nil;
-    if ([name isEqualToString:@"ProductType"] || [name isEqualToString:@"HWModelStr"] || [name isEqualToString:@"DeviceNameString"]) {
-        value = PXSnapshotString(@"DeviceModel") ?: PXSnapshotString(@"DeviceModelName");
-    } else if ([name isEqualToString:@"ProductVersion"]) {
-        value = PXSnapshotString(@"IOSVersion");
-    } else if ([name isEqualToString:@"ProductBuildVersion"] || [name isEqualToString:@"BuildVersion"]) {
-        value = PXSnapshotString(@"IOSBuild");
-    } else if ([name isEqualToString:@"HardwareModel"] || [name isEqualToString:@"BoardId"] || [name isEqualToString:@"BoardID"]) {
-        value = PXSnapshotString(@"HwModel") ?: PXSnapshotString(@"BoardID");
-    } else if ([name isEqualToString:@"DeviceClass"]) {
-        value = @"iPhone";
-    }
-    return value.length ? CFRetain((__bridge CFStringRef)value) : NULL;
-}
-
 static NSString *PXSafeBundleID(void) {
     NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
     return bid.length ? bid : [[NSProcessInfo processInfo] processName];
@@ -292,15 +274,6 @@ static int px_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *
         }
     }
     return orig_sysctlbyname ? orig_sysctlbyname(name, oldp, oldlenp, newp, newlen) : -1;
-}
-
-static CFTypeRef px_MGCopyAnswer(CFStringRef key) {
-    CFTypeRef value = PXCopyMGValueForKey(key);
-    if (value) {
-        PXInjectLog(@"MGCopyAnswer %@ spoofed", (__bridge NSString *)key);
-        return value;
-    }
-    return orig_MGCopyAnswer ? orig_MGCopyAnswer(key) : NULL;
 }
 
 __attribute__((used)) static struct { const void *replacement; const void *replacee; } PXInterposes[] __attribute__((section("__DATA,__interpose"))) = {
