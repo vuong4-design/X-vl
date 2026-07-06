@@ -784,6 +784,7 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         if (![copyDylib[@"ok"] isEqual:@"YES"]) {
             return PXIPCarrierFail(result, copyDylib[@"error"] ?: @"Failed to copy ProjectXInject.dylib into target Frameworks");
         }
+        result[@"rootTargetDylibInfoAfterCopy"] = PXIPRunRootDetailed(@[@"fileinfo", targetDylib]);
         NSDictionary *signTargetDylib = PXIPTrySignPath(targetDylib, [[NSBundle mainBundle] pathForResource:@"ProjectXInject" ofType:@"entitlements.plist"]);
         result[@"signTargetDylib"] = signTargetDylib ?: @{};
         NSDictionary *installCarrier = PXIPRunRootDetailed(@[@"installfile", patchedCarrier, carrierPath]);
@@ -791,10 +792,28 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         if (![installCarrier[@"ok"] isEqual:@"YES"]) {
             return PXIPCarrierFail(result, installCarrier[@"error"] ?: @"Failed to install patched carrier");
         }
+        result[@"rootInstalledCarrierInfoAfterInstall"] = PXIPRunRootDetailed(@[@"fileinfo", carrierPath]);
+        NSDictionary *rootContainsAfterInstall = PXIPRunRootDetailed(@[@"contains", carrierPath, dylibLoadPath]);
+        result[@"rootInstalledCarrierContainsLoadPath"] = rootContainsAfterInstall ?: @{};
+        BOOL appSeesInstalledLoadCommandAfterInstall = NO;
+        NSError *appInstallCheckErr = nil;
+        appSeesInstalledLoadCommandAfterInstall = [PXMachOInjector hasDylibLoadCommand:dylibLoadPath inMachOAtPath:carrierPath error:&appInstallCheckErr];
+        result[@"appInstalledCarrierHasLoadCommandAfterInstall"] = appSeesInstalledLoadCommandAfterInstall ? @"YES" : @"NO";
+        result[@"appInstalledCarrierLoadCommandAfterInstallError"] = appInstallCheckErr.localizedDescription ?: @"";
+        if (![rootContainsAfterInstall[@"ok"] isEqual:@"YES"] || !appSeesInstalledLoadCommandAfterInstall) {
+            NSDictionary *overwriteCarrier = PXIPRunRootDetailed(@[@"overwritefile", patchedCarrier, carrierPath]);
+            result[@"overwriteCarrier"] = overwriteCarrier ?: @{};
+            if ([overwriteCarrier[@"ok"] isEqual:@"YES"]) {
+                result[@"rootInstalledCarrierInfoAfterOverwrite"] = PXIPRunRootDetailed(@[@"fileinfo", carrierPath]);
+                result[@"rootInstalledCarrierContainsLoadPathAfterOverwrite"] = PXIPRunRootDetailed(@[@"contains", carrierPath, dylibLoadPath]);
+            }
+        }
         NSDictionary *chownCarrier = PXIPRunRootDetailed(@[@"chown", @"33", @"33", carrierPath]);
         NSDictionary *chownDylib = PXIPRunRootDetailed(@[@"chown", @"33", @"33", targetDylib]);
         result[@"chownCarrier"] = chownCarrier ?: @{};
         result[@"chownDylib"] = chownDylib ?: @{};
+        result[@"rootInstalledCarrierInfoAfterChown"] = PXIPRunRootDetailed(@[@"fileinfo", carrierPath]);
+        result[@"rootTargetDylibInfoAfterChown"] = PXIPRunRootDetailed(@[@"fileinfo", targetDylib]);
 
         NSMutableDictionary *state = [NSMutableDictionary dictionaryWithDictionary:PXIPReadState(bundleID) ?: @{}];
         [state addEntriesFromDictionary:@{
@@ -820,7 +839,7 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         PXIPAddCodeSignatureOnlyStatus(result, @"targetDylib", targetDylib);
         result[@"ok"] = @"YES";
         result[@"error"] = @"";
-        result[@"note"] = @"Framework carrier patched. Launch target app and check marker/log; CoreTrust signing may still be required depending on device state.";
+        result[@"note"] = @"Framework carrier patch attempted. Prefer rootInstalledCarrierContainsLoadPath/rootTargetDylibInfoAfterCopy over app-side status if app-side bundle view is stale. CoreTrust signing may still be required.";
         [PXDiagnostics log:@"[carrier] patch result=%@", result];
         return result;
     } @catch (NSException *ex) {
@@ -1188,6 +1207,13 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
     PXIPAddLoadCommandStatus(result, @"backupCarrier", backupCarrier, dylibLoadPath);
     PXIPAddLoadCommandStatus(result, @"patchedCarrier", patchedCarrier, dylibLoadPath);
     PXIPAddLoadCommandStatus(result, @"installedCarrier", carrierPath, dylibLoadPath);
+    if (carrierPath.length) {
+        result[@"rootInstalledCarrierInfo"] = PXIPRunRootDetailed(@[@"fileinfo", carrierPath]);
+        result[@"rootInstalledCarrierContainsLoadPath"] = PXIPRunRootDetailed(@[@"contains", carrierPath, dylibLoadPath]);
+    }
+    if (targetDylib.length) {
+        result[@"rootTargetDylibInfo"] = PXIPRunRootDetailed(@[@"fileinfo", targetDylib]);
+    }
     return result;
 }
 

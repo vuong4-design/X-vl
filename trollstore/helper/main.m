@@ -16,7 +16,10 @@
 //   weaponx_root_helper cpfile  <src-absolute-path> <dst-absolute-path>
 //   weaponx_root_helper replacefile <src-absolute-path> <dst-absolute-path>
 //   weaponx_root_helper installfile <src-absolute-path> <dst-absolute-path>
+//   weaponx_root_helper overwritefile <src-absolute-path> <dst-absolute-path>
 //   weaponx_root_helper patchprefix <src-absolute-path> <dst-absolute-path> <byte-count>
+//   weaponx_root_helper fileinfo <absolute-path>
+//   weaponx_root_helper contains <absolute-path> <needle>
 //   weaponx_root_helper ldidprobe
 //   weaponx_root_helper ldidsign <binary-absolute-path> [entitlements-plist]
 //   weaponx_root_helper dyldlaunch <executable> <dylib> <home> <bundleID> [logPath]
@@ -544,6 +547,68 @@ static int op_installfile(NSString *src, NSString *dst) {
     return 0;
 }
 
+static int op_overwritefile(NSString *src, NSString *dst) {
+    if (!pathIsAllowed(src)) { perr(@"overwritefile: src not allowed: %@", src); return 2; }
+    if (!pathIsAllowed(dst)) { perr(@"overwritefile: dst not allowed: %@", dst); return 2; }
+    struct stat srcSt;
+    if (stat(src.fileSystemRepresentation, &srcSt) != 0) {
+        perr(@"overwritefile stat src '%@' failed: %s", src, strerror(errno));
+        return 3;
+    }
+    int inFd = open(src.fileSystemRepresentation, O_RDONLY);
+    if (inFd < 0) {
+        perr(@"overwritefile open src '%@' failed: %s", src, strerror(errno));
+        return 3;
+    }
+    lchflags(dst.fileSystemRepresentation, 0);
+    chmod(dst.fileSystemRepresentation, 0777);
+    int outFd = open(dst.fileSystemRepresentation, O_WRONLY | O_TRUNC);
+    if (outFd < 0) {
+        int saved = errno;
+        close(inFd);
+        perr(@"overwritefile open dst '%@' failed: %s", dst, strerror(saved));
+        return 3;
+    }
+    char buf[1024 * 1024];
+    ssize_t n = 0;
+    while ((n = read(inFd, buf, sizeof(buf))) > 0) {
+        char *p = buf;
+        ssize_t remaining = n;
+        while (remaining > 0) {
+            ssize_t w = write(outFd, p, (size_t)remaining);
+            if (w < 0) {
+                int saved = errno;
+                close(inFd);
+                close(outFd);
+                perr(@"overwritefile write dst '%@' failed: %s", dst, strerror(saved));
+                return 3;
+            }
+            remaining -= w;
+            p += w;
+        }
+    }
+    if (n < 0) {
+        int saved = errno;
+        close(inFd);
+        close(outFd);
+        perr(@"overwritefile read src '%@' failed: %s", src, strerror(saved));
+        return 3;
+    }
+    ftruncate(outFd, srcSt.st_size);
+    fchmod(outFd, srcSt.st_mode & 07777 ? srcSt.st_mode & 07777 : 0755);
+    fsync(outFd);
+    close(inFd);
+    close(outFd);
+    NSString *reason = nil;
+    if (!files_equal(src, dst, &reason)) {
+        perr(@"overwritefile verification failed: %@", reason ?: @"unknown mismatch");
+        return 3;
+    }
+    printf("overwritten=%s\nverified=YES\n", dst.UTF8String);
+    fflush(stdout);
+    return 0;
+}
+
 static int op_patchprefix(NSString *src, NSString *dst, NSString *byteCountString) {
     if (!pathIsAllowed(src)) { perr(@"patchprefix: src not allowed: %@", src); return 2; }
     if (!pathIsAllowed(dst)) { perr(@"patchprefix: dst not allowed: %@", dst); return 2; }
@@ -640,6 +705,81 @@ static int op_patchprefix(NSString *src, NSString *dst, NSString *byteCountStrin
     printf("patchprefix=%s\nbytes=%zd\nverified=YES\n", dst.UTF8String, totalRead);
     fflush(stdout);
     return 0;
+}
+
+static int op_fileinfo(NSString *path) {
+    if (!pathIsAllowed(path)) { perr(@"fileinfo: path not allowed: %@", path); return 2; }
+    struct stat st;
+    if (stat(path.fileSystemRepresentation, &st) != 0) {
+        perr(@"fileinfo stat '%@' failed: %s", path, strerror(errno));
+        return 3;
+    }
+    int fd = open(path.fileSystemRepresentation, O_RDONLY);
+    if (fd < 0) {
+        perr(@"fileinfo open '%@' failed: %s", path, strerror(errno));
+        return 3;
+    }
+    unsigned char bytes[16] = {0};
+    ssize_t n = read(fd, bytes, sizeof(bytes));
+    close(fd);
+    if (n < 0) {
+        perr(@"fileinfo read '%@' failed: %s", path, strerror(errno));
+        return 3;
+    }
+    NSMutableString *hex = [NSMutableString string];
+    for (ssize_t i = 0; i < n; i++) [hex appendFormat:@"%02x", bytes[i]];
+    printf("path=%s\nsize=%lld\nmode=%04o\nuid=%u\ngid=%u\nmtime=%lld\nhead=%s\n",
+           path.UTF8String,
+           (long long)st.st_size,
+           st.st_mode & 07777,
+           st.st_uid,
+           st.st_gid,
+           (long long)st.st_mtime,
+           hex.UTF8String);
+    fflush(stdout);
+    return 0;
+}
+
+static int op_contains(NSString *path, NSString *needle) {
+    if (!pathIsAllowed(path)) { perr(@"contains: path not allowed: %@", path); return 2; }
+    if (!needle.length) { perr(@"contains: empty needle"); return 2; }
+    int fd = open(path.fileSystemRepresentation, O_RDONLY);
+    if (fd < 0) {
+        perr(@"contains open '%@' failed: %s", path, strerror(errno));
+        return 3;
+    }
+    NSData *needleData = [needle dataUsingEncoding:NSUTF8StringEncoding];
+    const unsigned char *needleBytes = needleData.bytes;
+    size_t needleLen = needleData.length;
+    unsigned char buf[8192];
+    NSMutableData *window = [NSMutableData data];
+    BOOL found = NO;
+    ssize_t n = 0;
+    while ((n = read(fd, buf, sizeof(buf))) > 0) {
+        [window appendBytes:buf length:(NSUInteger)n];
+        const unsigned char *bytes = window.bytes;
+        NSUInteger len = window.length;
+        if (needleLen <= len) {
+            for (NSUInteger i = 0; i + needleLen <= len; i++) {
+                if (memcmp(bytes + i, needleBytes, needleLen) == 0) { found = YES; break; }
+            }
+        }
+        if (found) break;
+        if (window.length > needleLen) {
+            NSUInteger keep = MIN((NSUInteger)needleLen - 1, window.length);
+            NSData *tail = [window subdataWithRange:NSMakeRange(window.length - keep, keep)];
+            [window setData:tail];
+        }
+    }
+    int saved = errno;
+    close(fd);
+    if (n < 0) {
+        perr(@"contains read '%@' failed: %s", path, strerror(saved));
+        return 3;
+    }
+    printf("contains=%s\nneedle=%s\npath=%s\n", found ? "YES" : "NO", needle.UTF8String, path.UTF8String);
+    fflush(stdout);
+    return found ? 0 : 1;
 }
 
 static NSString *find_ldid(void) {
@@ -848,9 +988,21 @@ int main(int argc, char *argv[]) {
             if (argc != 4) { perr(@"installfile: expects <src> <dst>"); return 2; }
             return op_installfile(@(argv[2]), @(argv[3]));
         }
+        if ([op isEqualToString:@"overwritefile"]) {
+            if (argc != 4) { perr(@"overwritefile: expects <src> <dst>"); return 2; }
+            return op_overwritefile(@(argv[2]), @(argv[3]));
+        }
         if ([op isEqualToString:@"patchprefix"]) {
             if (argc != 5) { perr(@"patchprefix: expects <src> <dst> <byte-count>"); return 2; }
             return op_patchprefix(@(argv[2]), @(argv[3]), @(argv[4]));
+        }
+        if ([op isEqualToString:@"fileinfo"]) {
+            if (argc != 3) { perr(@"fileinfo: expects <path>"); return 2; }
+            return op_fileinfo(@(argv[2]));
+        }
+        if ([op isEqualToString:@"contains"]) {
+            if (argc != 4) { perr(@"contains: expects <path> <needle>"); return 2; }
+            return op_contains(@(argv[2]), @(argv[3]));
         }
         if ([op isEqualToString:@"ldidprobe"]) {
             if (argc != 2) { perr(@"ldidprobe: expects no args"); return 2; }
