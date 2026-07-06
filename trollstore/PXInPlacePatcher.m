@@ -782,9 +782,18 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         NSDictionary *copyDylib = PXIPRunRootDetailed(@[@"cpfile", sourceDylib, targetDylib]);
         result[@"copyDylib"] = copyDylib ?: @{};
         if (![copyDylib[@"ok"] isEqual:@"YES"]) {
-            return PXIPCarrierFail(result, copyDylib[@"error"] ?: @"Failed to copy ProjectXInject.dylib into target Frameworks");
+            NSDictionary *toolCopyDylib = PXIPRunRootDetailed(@[@"toolcpfile", sourceDylib, targetDylib]);
+            result[@"toolCopyDylibAfterCpfileFailure"] = toolCopyDylib ?: @{};
+            if (![toolCopyDylib[@"ok"] isEqual:@"YES"]) {
+                return PXIPCarrierFail(result, toolCopyDylib[@"error"] ?: copyDylib[@"error"] ?: @"Failed to copy ProjectXInject.dylib into target Frameworks");
+            }
         }
         result[@"rootTargetDylibInfoAfterCopy"] = PXIPRunRootDetailed(@[@"fileinfo", targetDylib]);
+        if (![result[@"rootTargetDylibInfoAfterCopy"][@"ok"] isEqual:@"YES"]) {
+            NSDictionary *toolCopyDylib = PXIPRunRootDetailed(@[@"toolcpfile", sourceDylib, targetDylib]);
+            result[@"toolCopyDylibAfterMissingInfo"] = toolCopyDylib ?: @{};
+            result[@"rootTargetDylibInfoAfterToolCopy"] = PXIPRunRootDetailed(@[@"fileinfo", targetDylib]);
+        }
         NSDictionary *signTargetDylib = PXIPTrySignPath(targetDylib, [[NSBundle mainBundle] pathForResource:@"ProjectXInject" ofType:@"entitlements.plist"]);
         result[@"signTargetDylib"] = signTargetDylib ?: @{};
         NSDictionary *installCarrier = PXIPRunRootDetailed(@[@"installfile", patchedCarrier, carrierPath]);
@@ -806,6 +815,13 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
             if ([overwriteCarrier[@"ok"] isEqual:@"YES"]) {
                 result[@"rootInstalledCarrierInfoAfterOverwrite"] = PXIPRunRootDetailed(@[@"fileinfo", carrierPath]);
                 result[@"rootInstalledCarrierContainsLoadPathAfterOverwrite"] = PXIPRunRootDetailed(@[@"contains", carrierPath, dylibLoadPath]);
+            }
+            NSDictionary *containsAfterOverwrite = result[@"rootInstalledCarrierContainsLoadPathAfterOverwrite"];
+            if (![containsAfterOverwrite[@"ok"] isEqual:@"YES"]) {
+                NSDictionary *toolCopyCarrier = PXIPRunRootDetailed(@[@"toolcpfile", patchedCarrier, carrierPath]);
+                result[@"toolCopyCarrierAfterOverwriteFailure"] = toolCopyCarrier ?: @{};
+                result[@"rootInstalledCarrierInfoAfterToolCopy"] = PXIPRunRootDetailed(@[@"fileinfo", carrierPath]);
+                result[@"rootInstalledCarrierContainsLoadPathAfterToolCopy"] = PXIPRunRootDetailed(@[@"contains", carrierPath, dylibLoadPath]);
             }
         }
         NSDictionary *chownCarrier = PXIPRunRootDetailed(@[@"chown", @"33", @"33", carrierPath]);

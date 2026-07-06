@@ -14,6 +14,7 @@
 //   weaponx_root_helper mv      <src-absolute-path> <dst-absolute-path>
 //   weaponx_root_helper mkdir   <absolute-path>
 //   weaponx_root_helper cpfile  <src-absolute-path> <dst-absolute-path>
+//   weaponx_root_helper toolcpfile <src-absolute-path> <dst-absolute-path>
 //   weaponx_root_helper replacefile <src-absolute-path> <dst-absolute-path>
 //   weaponx_root_helper installfile <src-absolute-path> <dst-absolute-path>
 //   weaponx_root_helper overwritefile <src-absolute-path> <dst-absolute-path>
@@ -139,6 +140,8 @@ static BOOL pathIsAllowed(NSString *path) {
 }
 
 #pragma mark - ops
+
+static BOOL files_equal(NSString *a, NSString *b, NSString **reason);
 
 static int op_rm(NSString *path) {
     if (!pathIsAllowed(path)) { perr(@"rm: path not allowed: %@", path); return 2; }
@@ -347,6 +350,80 @@ static int op_cpfile(NSString *src, NSString *dst) {
     fsync(outFd);
     close(inFd);
     close(outFd);
+    NSString *reason = nil;
+    if (!files_equal(src, dst, &reason)) {
+        perr(@"cpfile verification failed: %@", reason ?: @"unknown mismatch");
+        return 3;
+    }
+    return 0;
+}
+
+static NSString *find_system_tool(NSArray<NSString *> *names) {
+    NSArray<NSString *> *dirs = @[@"/bin", @"/usr/bin", @"/sbin", @"/usr/sbin"];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (NSString *name in names) {
+        if ([name isAbsolutePath] && [fm isExecutableFileAtPath:name]) return name;
+        for (NSString *dir in dirs) {
+            NSString *path = [dir stringByAppendingPathComponent:name];
+            if ([fm isExecutableFileAtPath:path]) return path;
+        }
+    }
+    return nil;
+}
+
+static int spawn_wait_tool(NSString *tool, NSArray<NSString *> *args) {
+    NSMutableArray<NSString *> *argvObjects = [NSMutableArray arrayWithObject:tool];
+    [argvObjects addObjectsFromArray:args];
+    NSMutableArray<NSValue *> *allocated = [NSMutableArray array];
+    char **argv = calloc(argvObjects.count + 1, sizeof(char *));
+    if (!argv) { perr(@"spawn tool argv allocation failed"); return 3; }
+    for (NSUInteger i = 0; i < argvObjects.count; i++) {
+        argv[i] = strdup(argvObjects[i].fileSystemRepresentation);
+        [allocated addObject:[NSValue valueWithPointer:argv[i]]];
+    }
+    argv[argvObjects.count] = NULL;
+    pid_t pid = 0;
+    int rc = posix_spawn(&pid, tool.fileSystemRepresentation, NULL, NULL, argv, environ);
+    for (NSValue *value in allocated) free([value pointerValue]);
+    free(argv);
+    if (rc != 0) {
+        perr(@"spawn '%@' failed: %s", tool, strerror(rc));
+        return 3;
+    }
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) {
+        perr(@"waitpid '%@' failed: %s", tool, strerror(errno));
+        return 3;
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        perr(@"tool '%@' failed status=%d", tool, status);
+        return 3;
+    }
+    return 0;
+}
+
+static int op_toolcpfile(NSString *src, NSString *dst) {
+    if (!pathIsAllowed(src)) { perr(@"toolcpfile: src not allowed: %@", src); return 2; }
+    if (!pathIsAllowed(dst)) { perr(@"toolcpfile: dst not allowed: %@", dst); return 2; }
+    NSString *cp = find_system_tool(@[@"cp"]);
+    if (!cp.length) { perr(@"toolcpfile: cp not found"); return 3; }
+    NSString *parent = [dst stringByDeletingLastPathComponent];
+    if (parent.length) {
+        NSError *err = nil;
+        if (![[NSFileManager defaultManager] createDirectoryAtPath:parent withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions: @0755} error:&err]) {
+            perr(@"toolcpfile mkdir parent '%@' failed: %@", parent, err.localizedDescription ?: @"unknown error");
+            return 3;
+        }
+    }
+    int rc = spawn_wait_tool(cp, @[@"-f", @"-p", src, dst]);
+    if (rc != 0) return rc;
+    NSString *reason = nil;
+    if (!files_equal(src, dst, &reason)) {
+        perr(@"toolcpfile verification failed: %@", reason ?: @"unknown mismatch");
+        return 3;
+    }
+    printf("toolcopied=%s\nverified=YES\ncp=%s\n", dst.UTF8String, cp.UTF8String);
+    fflush(stdout);
     return 0;
 }
 
@@ -979,6 +1056,10 @@ int main(int argc, char *argv[]) {
         if ([op isEqualToString:@"cpfile"]) {
             if (argc != 4) { perr(@"cpfile: expects <src> <dst>"); return 2; }
             return op_cpfile(@(argv[2]), @(argv[3]));
+        }
+        if ([op isEqualToString:@"toolcpfile"]) {
+            if (argc != 4) { perr(@"toolcpfile: expects <src> <dst>"); return 2; }
+            return op_toolcpfile(@(argv[2]), @(argv[3]));
         }
         if ([op isEqualToString:@"replacefile"]) {
             if (argc != 4) { perr(@"replacefile: expects <src> <dst>"); return 2; }
