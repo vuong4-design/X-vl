@@ -429,15 +429,19 @@ static NSDictionary<NSString *, id> *PXIPTrySignPath(NSString *path, NSString *e
             return result;
         }
 
-        NSDictionary *patchPrefix = PXIPRunRootDetailed(@[@"patchprefix", patchedCopy, executablePath, @"65536"]);
-        result[@"patchExecutablePrefix"] = patchPrefix ?: @{};
-        if (![patchPrefix[@"ok"] isEqual:@"YES"]) {
-            result[@"ok"] = @"NO";
-            result[@"error"] = patchPrefix[@"error"] ?: @"Failed to patch executable prefix";
-            return result;
+        PXIPAddLoadCommandStatus(result, @"patchedCopy", patchedCopy, dylibLoadPath);
+        PXIPAddLoadCommandStatus(result, @"installedExecutableAfterReplace", executablePath, dylibLoadPath);
+
+        if (![result[@"installedExecutableAfterReplaceHasLoadCommand"] isEqual:@"YES"]) {
+            NSDictionary *patchPrefix = PXIPRunRootDetailed(@[@"patchprefix", patchedCopy, executablePath, @"65536"]);
+            result[@"patchExecutablePrefix"] = patchPrefix ?: @{};
+            if (![patchPrefix[@"ok"] isEqual:@"YES"]) {
+                result[@"ok"] = @"NO";
+                result[@"error"] = patchPrefix[@"error"] ?: @"replacefile did not install the patched header, and patchprefix fallback failed";
+                return result;
+            }
         }
 
-        PXIPAddLoadCommandStatus(result, @"patchedCopy", patchedCopy, dylibLoadPath);
         PXIPAddLoadCommandStatus(result, @"installedExecutable", executablePath, dylibLoadPath);
 
         NSDictionary *signExecutable = PXIPTrySignPath(executablePath, entitlementsPath);
@@ -508,13 +512,6 @@ static NSDictionary<NSString *, id> *PXIPTrySignPath(NSString *path, NSString *e
     if (![replaceExecutable[@"ok"] isEqual:@"YES"]) {
         result[@"ok"] = @"NO";
         result[@"error"] = replaceExecutable[@"error"] ?: @"Failed to restore executable";
-        return result;
-    }
-    NSDictionary *patchPrefix = PXIPRunRootDetailed(@[@"patchprefix", backupExecutable, executablePath, @"65536"]);
-    result[@"patchExecutablePrefix"] = patchPrefix ?: @{};
-    if (![patchPrefix[@"ok"] isEqual:@"YES"]) {
-        result[@"ok"] = @"NO";
-        result[@"error"] = patchPrefix[@"error"] ?: @"Failed to restore executable prefix";
         return result;
     }
     if (targetDylib.length) {
