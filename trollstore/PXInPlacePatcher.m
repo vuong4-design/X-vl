@@ -251,28 +251,22 @@ static uint32_t PXIPDOSDateTime(NSDate *date) {
 
 static BOOL PXIPEnumerateFiles(NSString *root, NSMutableArray<NSString *> *relativeFiles, NSError **error) {
     NSFileManager *fm = [NSFileManager defaultManager];
-    __block NSError *enumerationError = nil;
-    NSDirectoryEnumerator *en = [fm enumeratorAtURL:[NSURL fileURLWithPath:root isDirectory:YES]
-                        includingPropertiesForKeys:@[NSURLIsRegularFileKey, NSURLIsSymbolicLinkKey]
-                                           options:0
-                                      errorHandler:^BOOL(__unused NSURL *url, NSError *err) {
-        if (!enumerationError) enumerationError = err;
-        return NO;
-    }];
-    NSURL *url = nil;
-    while ((url = [en nextObject])) {
-        NSNumber *isRegular = nil;
-        NSNumber *isSymlink = nil;
-        [url getResourceValue:&isRegular forKey:NSURLIsRegularFileKey error:nil];
-        [url getResourceValue:&isSymlink forKey:NSURLIsSymbolicLinkKey error:nil];
-        if (!isRegular.boolValue && !isSymlink.boolValue) continue;
-        NSString *path = url.path;
-        if (![path hasPrefix:[root stringByAppendingString:@"/"]]) continue;
-        [relativeFiles addObject:[path substringFromIndex:root.length + 1]];
+    NSDirectoryEnumerator *en = [fm enumeratorAtPath:root];
+    NSString *relativePath = nil;
+    while ((relativePath = [en nextObject])) {
+        NSString *fullPath = [root stringByAppendingPathComponent:relativePath];
+        NSDictionary *attrs = [fm attributesOfItemAtPath:fullPath error:nil];
+        NSString *type = attrs[NSFileType];
+        if (![type isEqualToString:NSFileTypeRegular] && ![type isEqualToString:NSFileTypeSymbolicLink]) continue;
+        [relativeFiles addObject:relativePath];
     }
     [relativeFiles sortUsingSelector:@selector(compare:)];
-    if (enumerationError && error) *error = enumerationError;
-    return enumerationError == nil;
+    if (!relativeFiles.count && error) {
+        *error = [NSError errorWithDomain:PXInPlacePatcherErrorDomain
+                                     code:82
+                                 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"No files found while packaging %@", root ?: @""]}];
+    }
+    return relativeFiles.count > 0;
 }
 
 static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError **error) {
