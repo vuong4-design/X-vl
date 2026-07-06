@@ -20,6 +20,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSDictionary<NSString *, id> *)prepareInPlaceBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)patchPreparedInPlaceCopyBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)installPatchedInPlaceCopyBundleID:(NSString *)bundleID;
++ (NSDictionary<NSString *, id> *)installPatchedInPlaceCopyWithoutLaunchBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)restoreInPlaceBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)inPlaceStatusBundleID:(NSString *)bundleID;
 

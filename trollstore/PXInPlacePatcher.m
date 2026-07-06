@@ -391,9 +391,17 @@ static NSDictionary<NSString *, id> *PXIPTrySignPath(NSString *path, NSString *e
 }
 
 + (NSDictionary<NSString *,id> *)installPatchedCopyBundleID:(NSString *)bundleID {
+    return [self installPatchedCopyBundleID:bundleID launchAfterInstall:YES];
+}
+
++ (NSDictionary<NSString *,id> *)installPatchedCopyWithoutLaunchBundleID:(NSString *)bundleID {
+    return [self installPatchedCopyBundleID:bundleID launchAfterInstall:NO];
+}
+
++ (NSDictionary<NSString *,id> *)installPatchedCopyBundleID:(NSString *)bundleID launchAfterInstall:(BOOL)launchAfterInstall {
     NSMutableDictionary *result = [NSMutableDictionary dictionary];
     result[@"bundleID"] = bundleID ?: @"";
-    [PXDiagnostics log:@"[patch] install patched copy requested bundleID=%@", bundleID ?: @""];
+    [PXDiagnostics log:@"[patch] install patched copy requested bundleID=%@ launch=%@", bundleID ?: @"", launchAfterInstall ? @"YES" : @"NO"];
     @try {
         NSDictionary *state = PXIPReadState(bundleID);
         result[@"state"] = state ?: @{};
@@ -438,7 +446,17 @@ static NSDictionary<NSString *, id> *PXIPTrySignPath(NSString *path, NSString *e
         result[@"state"] = newState ?: @{};
         result[@"verificationDeferred"] = @"YES";
         result[@"signatureStatus"] = @"not-checked";
+        result[@"launchAfterInstall"] = launchAfterInstall ? @"YES" : @"NO";
         result[@"note"] = @"Executable installed; run In-Place Status separately to verify load command.";
+
+        if (!launchAfterInstall) {
+            NSDictionary *status = [self statusForBundleID:bundleID];
+            result[@"immediateStatus"] = status ?: @{};
+            result[@"ok"] = @"YES";
+            result[@"error"] = @"";
+            [PXDiagnostics log:@"[patch] install without launch result=%@", result];
+            return result;
+        }
 
         NSDictionary *runtimeStatus = [PXRuntimeSnapshot statusForBundleID:bundleID];
         NSString *targetMarkerPath = runtimeStatus[@"targetMarkerPath"];

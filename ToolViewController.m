@@ -608,6 +608,23 @@
         }]];
         [selfRef presentViewController:confirm animated:YES completion:nil];
     }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Install Patched Copy No Launch" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
+        typeof(weakSelf) selfRef = weakSelf;
+        if (!selfRef) return;
+        UIAlertController *confirm = [UIAlertController alertControllerWithTitle:@"Install No Launch"
+                                                                         message:@"Replaces the target executable but does not open AIDA64. Use In-Place Status immediately after this."
+                                                                  preferredStyle:UIAlertControllerStyleAlert];
+        [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+        [confirm addAction:[UIAlertAction actionWithTitle:@"Install" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action2) {
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                NSDictionary *result = [PXDiagnostics installPatchedInPlaceCopyWithoutLaunchBundleID:@"com.finalwire.aida64"];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    showResult(@"Install No Launch", result);
+                });
+            });
+        }]];
+        [selfRef presentViewController:confirm animated:YES completion:nil];
+    }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Restore In-Place Original" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
         typeof(weakSelf) selfRef = weakSelf;
         if (!selfRef) return;
