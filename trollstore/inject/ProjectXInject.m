@@ -23,6 +23,17 @@ static NSString *PXSnapshotString(NSString *key) {
     return nil;
 }
 
+static BOOL PXSnapshotBool(NSString *key, BOOL defaultValue) {
+    id value = PXSnapshotObject(key);
+    if ([value isKindOfClass:[NSNumber class]]) return [value boolValue];
+    if ([value isKindOfClass:[NSString class]]) {
+        NSString *lower = [(NSString *)value lowercaseString];
+        if ([lower isEqualToString:@"yes"] || [lower isEqualToString:@"true"] || [lower isEqualToString:@"1"]) return YES;
+        if ([lower isEqualToString:@"no"] || [lower isEqualToString:@"false"] || [lower isEqualToString:@"0"]) return NO;
+    }
+    return defaultValue;
+}
+
 static NSString *PXSafeBundleID(void) {
     NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
     return bid.length ? bid : [[NSProcessInfo processInfo] processName];
@@ -109,7 +120,7 @@ static void PXWriteLoadedMarker(void) {
         @"profileId": PXSnapshotString(@"profileId") ?: @"",
         @"generation": PXSnapshotObject(@"generation") ?: @0,
         @"timestamp": @([[NSDate date] timeIntervalSince1970]),
-        @"hookBackend": @"objc-runtime",
+        @"hookBackend": PXSnapshotBool(@"EnableObjCHooks", NO) ? @"objc-runtime" : @"marker-only",
         @"snapshotPath": PXSnapshotPathForBundleID(gBundleID ?: @""),
     };
     [marker writeToFile:PXLocalMarkerPath() atomically:YES];
@@ -183,8 +194,12 @@ __attribute__((constructor))
 static void ProjectXInjectInit(void) {
     @autoreleasepool {
         PXLoadSnapshot();
-        PXInstallObjCHooks();
         PXWriteLoadedMarker();
+        if (PXSnapshotBool(@"EnableObjCHooks", NO)) {
+            PXInstallObjCHooks();
+        } else {
+            PXInjectLog(@"ObjC hooks disabled; marker-only safe mode");
+        }
         PXInjectLog(@"ProjectXInject initialized bundle=%@", gBundleID ?: @"");
     }
 }

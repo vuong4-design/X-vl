@@ -111,3 +111,22 @@ Expected marker paths:
 ```
 
 If marker exists, expand `ProjectXInject.dylib` beyond the initial Objective-C hooks.
+
+## If Target Exits On Launch
+
+After the first verified carrier patch, AIDA64 exited immediately on launch. The patch itself was root-side verified, so the next suspects are dyld/AMFI/CoreTrust validation or code running inside the dylib constructor.
+
+Mitigations added:
+
+- `ct_bypass` helper op applies `ct_bypass -r -i <binary> -t <teamID>` to patched carrier and injected dylib after signing/copying.
+- `ProjectXInject` now writes its loaded marker before installing hooks.
+- Objective-C hooks are disabled by default unless the runtime snapshot contains `EnableObjCHooks = YES`.
+- Default runtime mode is marker-only, which separates load/signing failures from hook implementation crashes.
+
+Validation sequence:
+
+1. Patch carrier again with the new build.
+2. Launch AIDA64.
+3. Open `Diag -> Injection Marker Status`.
+4. If `markerExists = YES`, runtime loading works; enable hooks gradually.
+5. If AIDA64 still exits before marker appears, collect a crash log and inspect dyld/AMFI/CoreTrust messages.

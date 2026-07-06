@@ -277,6 +277,32 @@ static NSDictionary *PXIPCarrierFail(NSMutableDictionary *result, NSString *mess
     return result;
 }
 
+static NSString *PXIPTeamIDFromExecutable(NSString *executablePath) {
+    NSError *err = nil;
+    NSDictionary *entitlements = [PXEntitlements entitlementsForBinaryAtPath:executablePath error:&err];
+    NSString *appIdentifier = [entitlements[@"application-identifier"] isKindOfClass:[NSString class]] ? entitlements[@"application-identifier"] : nil;
+    NSArray<NSString *> *parts = [appIdentifier componentsSeparatedByString:@"."];
+    NSString *teamID = parts.count > 1 ? parts.firstObject : nil;
+    if (teamID.length) return teamID;
+    NSString *teamIdentifier = [entitlements[@"com.apple.developer.team-identifier"] isKindOfClass:[NSString class]] ? entitlements[@"com.apple.developer.team-identifier"] : nil;
+    return teamIdentifier.length ? teamIdentifier : nil;
+}
+
+static NSDictionary<NSString *, id> *PXIPTryCoreTrustBypass(NSString *path, NSString *teamID) {
+    if (!path.length || ![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+        return @{@"ok": @"NO", @"status": @"missing-file", @"path": path ?: @"", @"teamID": teamID ?: @""};
+    }
+    if (!teamID.length) {
+        return @{@"ok": @"NO", @"status": @"missing-team-id", @"path": path ?: @"", @"teamID": @""};
+    }
+    NSDictionary *run = PXIPRunRootDetailed(@[@"ctbypass", path, teamID]);
+    NSMutableDictionary *result = [NSMutableDictionary dictionaryWithDictionary:run ?: @{}];
+    result[@"path"] = path ?: @"";
+    result[@"teamID"] = teamID ?: @"";
+    result[@"status"] = [result[@"ok"] isEqual:@"YES"] ? @"ct-bypass-applied" : @"ct-bypass-failed";
+    return result;
+}
+
 static BOOL PXIPIsIgnoredCarrierName(NSString *name) {
     NSString *lower = name.lowercaseString ?: @"";
     if ([lower hasPrefix:@"libswift"]) return YES;
@@ -689,6 +715,7 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         NSString *dylibLoadPath = @"@executable_path/Frameworks/ProjectXInject.dylib";
         NSString *targetDylib = [frameworksPath stringByAppendingPathComponent:@"ProjectXInject.dylib"];
         NSString *sourceDylib = [PXRuntimeSnapshot bundledInjectDylibPath];
+        NSString *teamID = PXIPTeamIDFromExecutable(scan[@"executablePath"] ?: @"");
         NSFileManager *fm = [NSFileManager defaultManager];
         if (!carrierPath.length || ![fm fileExistsAtPath:carrierPath]) {
             return PXIPCarrierFail(result, @"Selected carrier no longer exists");
@@ -712,6 +739,7 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         result[@"carrierPath"] = carrierPath ?: @"";
         result[@"targetDylib"] = targetDylib ?: @"";
         result[@"dylibLoadPath"] = dylibLoadPath ?: @"";
+        result[@"teamID"] = teamID ?: @"";
 
         NSString *rootErr = nil;
         if (!PXIPRunRoot(@[@"mkdir", backupDir], &rootErr)) {
@@ -771,8 +799,10 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
 
         NSDictionary *signCarrier = PXIPTrySignPath(patchedCarrier, nil);
         result[@"signPatchedCarrier"] = signCarrier ?: @{};
+        result[@"ctBypassPatchedCarrier"] = PXIPTryCoreTrustBypass(patchedCarrier, teamID) ?: @{};
         NSDictionary *signDylibSource = PXIPTrySignPath(sourceDylib, [[NSBundle mainBundle] pathForResource:@"ProjectXInject" ofType:@"entitlements.plist"]);
         result[@"signBundledDylib"] = signDylibSource ?: @{};
+        result[@"ctBypassBundledDylib"] = PXIPTryCoreTrustBypass(sourceDylib, teamID) ?: @{};
 
         if (executableName.length) {
             PXKillallTermThenKill(executableName, 0.5);
@@ -796,6 +826,7 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         }
         NSDictionary *signTargetDylib = PXIPTrySignPath(targetDylib, [[NSBundle mainBundle] pathForResource:@"ProjectXInject" ofType:@"entitlements.plist"]);
         result[@"signTargetDylib"] = signTargetDylib ?: @{};
+        result[@"ctBypassTargetDylib"] = PXIPTryCoreTrustBypass(targetDylib, teamID) ?: @{};
         NSDictionary *installCarrier = PXIPRunRootDetailed(@[@"installfile", patchedCarrier, carrierPath]);
         result[@"installCarrier"] = installCarrier ?: @{};
         if (![installCarrier[@"ok"] isEqual:@"YES"]) {
@@ -822,6 +853,7 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
                 result[@"toolCopyCarrierAfterOverwriteFailure"] = toolCopyCarrier ?: @{};
                 result[@"rootInstalledCarrierInfoAfterToolCopy"] = PXIPRunRootDetailed(@[@"fileinfo", carrierPath]);
                 result[@"rootInstalledCarrierContainsLoadPathAfterToolCopy"] = PXIPRunRootDetailed(@[@"contains", carrierPath, dylibLoadPath]);
+                result[@"ctBypassInstalledCarrierAfterToolCopy"] = PXIPTryCoreTrustBypass(carrierPath, teamID) ?: @{};
             }
         }
         NSDictionary *chownCarrier = PXIPRunRootDetailed(@[@"chown", @"33", @"33", carrierPath]);

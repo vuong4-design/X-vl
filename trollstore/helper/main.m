@@ -23,6 +23,7 @@
 //   weaponx_root_helper contains <absolute-path> <needle>
 //   weaponx_root_helper ldidprobe
 //   weaponx_root_helper ldidsign <binary-absolute-path> [entitlements-plist]
+//   weaponx_root_helper ctbypass <binary-absolute-path> <team-id>
 //   weaponx_root_helper dyldlaunch <executable> <dylib> <home> <bundleID> [logPath]
 //
 // Exit codes:
@@ -889,6 +890,10 @@ static NSString *find_ldid(void) {
     return find_system_tool(@[@"ldid", @"/usr/bin/ldid", @"/var/jb/usr/bin/ldid", @"/private/preboot/jb/usr/bin/ldid", @"/bin/ldid"]);
 }
 
+static NSString *find_ct_bypass(void) {
+    return find_system_tool(@[@"ct_bypass"]);
+}
+
 static int op_ldidprobe(void) {
     NSString *ldid = find_ldid();
     if (!ldid.length) {
@@ -916,24 +921,28 @@ static int op_ldidsign(NSString *binaryPath, NSString *entitlementsPath) {
         return 3;
     }
 
-    pid_t pid = 0;
     NSString *signArg = entitlementsPath.length ? [@"-S" stringByAppendingString:entitlementsPath] : @"-S";
-    const char *argv[] = { ldid.fileSystemRepresentation, signArg.fileSystemRepresentation, binaryPath.fileSystemRepresentation, NULL };
-    int rc = posix_spawn(&pid, ldid.fileSystemRepresentation, NULL, NULL, (char *const *)argv, (char *const *)environ);
-    if (rc != 0) {
-        perr(@"ldidsign: posix_spawn failed: %s", strerror(rc));
-        return 3;
-    }
-    int status = 0;
-    if (waitpid(pid, &status, 0) != pid) {
-        perr(@"ldidsign: waitpid failed: %s", strerror(errno));
-        return 3;
-    }
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        perr(@"ldidsign: ldid failed status=%d", status);
-        return 3;
-    }
+    int rc = spawn_wait_tool(ldid, @[signArg, binaryPath]);
+    if (rc != 0) return rc;
     printf("signed=%s\nldid=%s\nentitlements=%s\n", binaryPath.UTF8String, ldid.UTF8String, entitlementsPath.length ? entitlementsPath.UTF8String : "");
+    return 0;
+}
+
+static int op_ctbypass(NSString *binaryPath, NSString *teamID) {
+    if (!pathIsAllowed(binaryPath)) { perr(@"ctbypass: binary path not allowed: %@", binaryPath); return 2; }
+    if (!teamID.length || [teamID containsString:@"/"]) { perr(@"ctbypass: invalid team id: %@", teamID ?: @""); return 2; }
+    NSString *ctBypass = find_ct_bypass();
+    if (!ctBypass.length) {
+        perr(@"ctbypass: ct_bypass not found");
+        return 3;
+    }
+    if (access(binaryPath.fileSystemRepresentation, W_OK) != 0) {
+        perr(@"ctbypass: binary not writable: %@ (%s)", binaryPath, strerror(errno));
+        return 3;
+    }
+    int rc = spawn_wait_tool(ctBypass, @[@"-r", @"-i", binaryPath, @"-t", teamID]);
+    if (rc != 0) return rc;
+    printf("ctbypass=%s\nct_bypass=%s\nteamID=%s\n", binaryPath.UTF8String, ctBypass.UTF8String, teamID.UTF8String);
     return 0;
 }
 
@@ -1110,6 +1119,10 @@ int main(int argc, char *argv[]) {
             if (argc != 3 && argc != 4) { perr(@"ldidsign: expects <binary-path> [entitlements-plist]"); return 2; }
             NSString *entitlementsPath = argc == 4 ? @(argv[3]) : nil;
             return op_ldidsign(@(argv[2]), entitlementsPath);
+        }
+        if ([op isEqualToString:@"ctbypass"]) {
+            if (argc != 4) { perr(@"ctbypass: expects <binary-path> <team-id>"); return 2; }
+            return op_ctbypass(@(argv[2]), @(argv[3]));
         }
         if ([op isEqualToString:@"dyldlaunch"]) {
             if (argc != 6 && argc != 7) { perr(@"dyldlaunch: expects <executable> <dylib> <home> <bundleID> [logPath]"); return 2; }
