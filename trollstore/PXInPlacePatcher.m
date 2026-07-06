@@ -400,8 +400,6 @@ static NSDictionary<NSString *, id> *PXIPTrySignPath(NSString *path, NSString *e
         NSString *patchedCopy = state[@"patchedCopy"];
         NSString *executablePath = state[@"executablePath"];
         NSString *executableName = state[@"executableName"];
-        NSString *dylibLoadPath = state[@"dylibLoadPath"] ?: @"@executable_path/Frameworks/ProjectXInject.dylib";
-        NSString *entitlementsPath = state[@"originalEntitlementsPath"];
         if (!patchedCopy.length || ![[NSFileManager defaultManager] fileExistsAtPath:patchedCopy]) {
             result[@"ok"] = @"NO";
             result[@"error"] = @"No patched copy found. Run Patch Prepared Copy first.";
@@ -429,30 +427,17 @@ static NSDictionary<NSString *, id> *PXIPTrySignPath(NSString *path, NSString *e
             return result;
         }
 
-        PXIPAddLoadCommandStatus(result, @"patchedCopy", patchedCopy, dylibLoadPath);
-        PXIPAddLoadCommandStatus(result, @"installedExecutableAfterReplace", executablePath, dylibLoadPath);
-        if (![result[@"installedExecutableAfterReplaceHasLoadCommand"] isEqual:@"YES"]) {
-            result[@"ok"] = @"NO";
-            result[@"error"] = @"installfile completed, but live executable still does not contain ProjectXInject load command";
-            return result;
-        }
-
-        PXIPAddLoadCommandStatus(result, @"installedExecutable", executablePath, dylibLoadPath);
-
-        NSDictionary *signExecutable = PXIPTrySignPath(executablePath, entitlementsPath);
-        result[@"signExecutable"] = signExecutable ?: @{};
-        if ([signExecutable[@"ok"] isEqual:@"YES"]) {
-            PXIPAddLoadCommandStatus(result, @"installedExecutableAfterSign", executablePath, dylibLoadPath);
-        }
-
         NSMutableDictionary *newState = [NSMutableDictionary dictionaryWithDictionary:state ?: @{}];
-        newState[@"mode"] = [signExecutable[@"ok"] isEqual:@"YES"] ? @"inplace-installed-signed" : @"inplace-installed-unsigned";
+        newState[@"mode"] = @"inplace-installed-unverified";
         newState[@"installedPatchedCopy"] = @"YES";
-        newState[@"installedExecutableHasLoadCommand"] = result[@"installedExecutableHasLoadCommand"] ?: @"NO";
-        newState[@"installedExecutableFingerprint"] = result[@"installedExecutableFingerprint"] ?: @"";
-        newState[@"signatureStatus"] = signExecutable[@"status"] ?: @"not-resigned";
+        newState[@"installedExecutableHasLoadCommand"] = @"UNKNOWN";
+        newState[@"installedExecutableFingerprint"] = @"";
+        newState[@"signatureStatus"] = @"not-checked";
         newState[@"installedAt"] = @([[NSDate date] timeIntervalSince1970]);
         PXIPWriteState(bundleID, newState);
+        result[@"verificationDeferred"] = @"YES";
+        result[@"signatureStatus"] = @"not-checked";
+        result[@"note"] = @"Executable installed; run In-Place Status separately to verify load command.";
 
         NSDictionary *runtimeStatus = [PXRuntimeSnapshot statusForBundleID:bundleID];
         NSString *targetMarkerPath = runtimeStatus[@"targetMarkerPath"];
