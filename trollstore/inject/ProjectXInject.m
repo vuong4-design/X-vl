@@ -9,8 +9,6 @@
 #import <string.h>
 #import <sys/sysctl.h>
 
-extern CFTypeRef MGCopyAnswer(CFStringRef key) __attribute__((weak_import));
-
 static NSString *const PXInjectBaseDir = @"/var/mobile/Library/ProjectXTroll";
 static NSString *const PXInjectDylibVersion = @"0.1.0";
 
@@ -307,14 +305,13 @@ static CFTypeRef px_MGCopyAnswer(CFStringRef key) {
 
 __attribute__((used)) static struct { const void *replacement; const void *replacee; } PXInterposes[] __attribute__((section("__DATA,__interpose"))) = {
     { (const void *)px_sysctlbyname, (const void *)sysctlbyname },
-    { (const void *)px_MGCopyAnswer, (const void *)MGCopyAnswer },
 };
 
 static void PXInstallCHooks(void) {
     orig_sysctlbyname = dlsym(RTLD_NEXT, "sysctlbyname");
     orig_MGCopyAnswer = dlsym(RTLD_NEXT, "MGCopyAnswer");
     if (!orig_MGCopyAnswer) orig_MGCopyAnswer = dlsym(RTLD_DEFAULT, "MGCopyAnswer");
-    PXInjectLog(@"C hooks enabled sysctlbyname=%p MGCopyAnswer=%p", orig_sysctlbyname, orig_MGCopyAnswer);
+    PXInjectLog(@"C hooks enabled sysctlbyname=%p MGCopyAnswer=%p MGCopyAnswerInterpose=disabled", orig_sysctlbyname, orig_MGCopyAnswer);
 }
 
 __attribute__((constructor))
