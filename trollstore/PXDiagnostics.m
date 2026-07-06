@@ -255,6 +255,12 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     return [PXInPlacePatcher patchPreparedCopyBundleID:targetBundleID];
 }
 
++ (NSDictionary<NSString *,id> *)exportPatchedTIPABundleID:(NSString *)bundleID {
+    NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
+    [self log:@"[patch] diagnostic export patched TIPA bundleID=%@", targetBundleID];
+    return [PXInPlacePatcher exportPatchedTIPABundleID:targetBundleID];
+}
+
 + (NSDictionary<NSString *,id> *)installPatchedInPlaceCopyBundleID:(NSString *)bundleID {
     NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
     [self log:@"[patch] diagnostic install patched copy bundleID=%@", targetBundleID];

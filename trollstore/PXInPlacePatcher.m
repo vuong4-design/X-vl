@@ -9,6 +9,7 @@
 #import "common/PXProcessKiller.h"
 
 #import <objc/message.h>
+#import <zlib.h>
 
 NSString * const PXInPlacePatcherErrorDomain = @"PXInPlacePatcherErrorDomain";
 
@@ -22,6 +23,14 @@ static NSString *PXIPStateDir(void) {
 
 static NSString *PXIPBackupRoot(void) {
     return [PXIPBaseDir() stringByAppendingPathComponent:@"InjectionBackups"];
+}
+
+static NSString *PXIPStagingRoot(void) {
+    return [PXIPBaseDir() stringByAppendingPathComponent:@"AppStaging"];
+}
+
+static NSString *PXIPPatchedAppsRoot(void) {
+    return [PXIPBaseDir() stringByAppendingPathComponent:@"PatchedApps"];
 }
 
 static NSString *PXIPSafeName(NSString *value) {
@@ -222,6 +231,125 @@ static NSDictionary<NSString *, id> *PXIPTrySignPath(NSString *path, NSString *e
     };
 }
 
+static void PXIPWriteLE16(NSMutableData *data, uint16_t value) {
+    uint8_t b[2] = { (uint8_t)(value & 0xff), (uint8_t)((value >> 8) & 0xff) };
+    [data appendBytes:b length:sizeof(b)];
+}
+
+static void PXIPWriteLE32(NSMutableData *data, uint32_t value) {
+    uint8_t b[4] = { (uint8_t)(value & 0xff), (uint8_t)((value >> 8) & 0xff), (uint8_t)((value >> 16) & 0xff), (uint8_t)((value >> 24) & 0xff) };
+    [data appendBytes:b length:sizeof(b)];
+}
+
+static uint32_t PXIPDOSDateTime(NSDate *date) {
+    NSDateComponents *c = [[NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian] components:NSCalendarUnitYear | NSCalendarUnitMonth | NSCalendarUnitDay | NSCalendarUnitHour | NSCalendarUnitMinute | NSCalendarUnitSecond fromDate:date ?: [NSDate date]];
+    NSInteger year = MAX(1980, c.year);
+    uint32_t dosTime = (uint32_t)((c.hour << 11) | (c.minute << 5) | (c.second / 2));
+    uint32_t dosDate = (uint32_t)(((year - 1980) << 9) | (c.month << 5) | c.day);
+    return (dosDate << 16) | dosTime;
+}
+
+static BOOL PXIPEnumerateFiles(NSString *root, NSMutableArray<NSString *> *relativeFiles, NSError **error) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSDirectoryEnumerator *en = [fm enumeratorAtURL:[NSURL fileURLWithPath:root isDirectory:YES]
+                        includingPropertiesForKeys:@[NSURLIsRegularFileKey, NSURLIsSymbolicLinkKey]
+                                           options:0
+                                      errorHandler:^BOOL(__unused NSURL *url, NSError *err) {
+        if (error && !*error) *error = err;
+        return NO;
+    }];
+    NSURL *url = nil;
+    while ((url = [en nextObject])) {
+        NSNumber *isRegular = nil;
+        NSNumber *isSymlink = nil;
+        [url getResourceValue:&isRegular forKey:NSURLIsRegularFileKey error:nil];
+        [url getResourceValue:&isSymlink forKey:NSURLIsSymbolicLinkKey error:nil];
+        if (!isRegular.boolValue && !isSymlink.boolValue) continue;
+        NSString *path = url.path;
+        if (![path hasPrefix:[root stringByAppendingString:@"/"]]) continue;
+        [relativeFiles addObject:[path substringFromIndex:root.length + 1]];
+    }
+    [relativeFiles sortUsingSelector:@selector(compare:)];
+    return error ? (*error == nil) : YES;
+}
+
+static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError **error) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSMutableArray<NSString *> *relativeFiles = [NSMutableArray array];
+    NSError *enumErr = nil;
+    if (!PXIPEnumerateFiles(sourceRoot, relativeFiles, &enumErr)) {
+        if (error) *error = enumErr;
+        return NO;
+    }
+
+    NSMutableData *zip = [NSMutableData data];
+    NSMutableData *central = [NSMutableData data];
+    for (NSString *relativePath in relativeFiles) {
+        NSString *fullPath = [sourceRoot stringByAppendingPathComponent:relativePath];
+        NSData *fileData = [NSData dataWithContentsOfFile:fullPath options:0 error:error];
+        if (!fileData) return NO;
+        NSData *nameData = [[relativePath stringByReplacingOccurrencesOfString:@"\\" withString:@"/"] dataUsingEncoding:NSUTF8StringEncoding];
+        if (nameData.length > UINT16_MAX || fileData.length > UINT32_MAX || zip.length > UINT32_MAX) {
+            if (error) *error = [NSError errorWithDomain:PXInPlacePatcherErrorDomain code:80 userInfo:@{NSLocalizedDescriptionKey: @"ZIP64 not supported for patched TIPA export"}];
+            return NO;
+        }
+        NSDictionary *attrs = [fm attributesOfItemAtPath:fullPath error:nil] ?: @{};
+        uint32_t dos = PXIPDOSDateTime(attrs[NSFileModificationDate]);
+        uint32_t crc = crc32(0L, Z_NULL, 0);
+        crc = crc32(crc, fileData.bytes, (uInt)fileData.length);
+        uint32_t localOffset = (uint32_t)zip.length;
+
+        PXIPWriteLE32(zip, 0x04034b50);
+        PXIPWriteLE16(zip, 20);
+        PXIPWriteLE16(zip, 0);
+        PXIPWriteLE16(zip, 0);
+        PXIPWriteLE32(zip, dos);
+        PXIPWriteLE32(zip, crc);
+        PXIPWriteLE32(zip, (uint32_t)fileData.length);
+        PXIPWriteLE32(zip, (uint32_t)fileData.length);
+        PXIPWriteLE16(zip, (uint16_t)nameData.length);
+        PXIPWriteLE16(zip, 0);
+        [zip appendData:nameData];
+        [zip appendData:fileData];
+
+        PXIPWriteLE32(central, 0x02014b50);
+        PXIPWriteLE16(central, 0x0314);
+        PXIPWriteLE16(central, 20);
+        PXIPWriteLE16(central, 0);
+        PXIPWriteLE16(central, 0);
+        PXIPWriteLE32(central, dos);
+        PXIPWriteLE32(central, crc);
+        PXIPWriteLE32(central, (uint32_t)fileData.length);
+        PXIPWriteLE32(central, (uint32_t)fileData.length);
+        PXIPWriteLE16(central, (uint16_t)nameData.length);
+        PXIPWriteLE16(central, 0);
+        PXIPWriteLE16(central, 0);
+        PXIPWriteLE16(central, 0);
+        PXIPWriteLE16(central, 0);
+        PXIPWriteLE32(central, 0100644 << 16);
+        PXIPWriteLE32(central, localOffset);
+        [central appendData:nameData];
+    }
+
+    if (relativeFiles.count > UINT16_MAX || central.length > UINT32_MAX || zip.length > UINT32_MAX) {
+        if (error) *error = [NSError errorWithDomain:PXInPlacePatcherErrorDomain code:81 userInfo:@{NSLocalizedDescriptionKey: @"ZIP central directory too large"}];
+        return NO;
+    }
+    uint32_t centralOffset = (uint32_t)zip.length;
+    [zip appendData:central];
+    PXIPWriteLE32(zip, 0x06054b50);
+    PXIPWriteLE16(zip, 0);
+    PXIPWriteLE16(zip, 0);
+    PXIPWriteLE16(zip, (uint16_t)relativeFiles.count);
+    PXIPWriteLE16(zip, (uint16_t)relativeFiles.count);
+    PXIPWriteLE32(zip, (uint32_t)central.length);
+    PXIPWriteLE32(zip, centralOffset);
+    PXIPWriteLE16(zip, 0);
+
+    [fm createDirectoryAtPath:[zipPath stringByDeletingLastPathComponent] withIntermediateDirectories:YES attributes:nil error:nil];
+    return [zip writeToFile:zipPath options:NSDataWritingAtomic error:error];
+}
+
 @implementation PXInPlacePatcher
 
 + (NSDictionary<NSString *,id> *)prepareBundleID:(NSString *)bundleID {
@@ -386,6 +514,118 @@ static NSDictionary<NSString *, id> *PXIPTrySignPath(NSString *path, NSString *e
         result[@"ok"] = @"NO";
         result[@"error"] = [NSString stringWithFormat:@"Exception during patch prepared copy: %@ %@", ex.name ?: @"", ex.reason ?: @""];
         [PXDiagnostics log:@"[patch] patch prepared copy exception=%@", result[@"error"]];
+        return result;
+    }
+}
+
++ (NSDictionary<NSString *,id> *)exportPatchedTIPABundleID:(NSString *)bundleID {
+    NSMutableDictionary *result = [NSMutableDictionary dictionary];
+    result[@"bundleID"] = bundleID ?: @"";
+    [PXDiagnostics log:@"[patch] export patched TIPA requested bundleID=%@", bundleID ?: @""];
+    @try {
+        if (!bundleID.length) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = @"Missing bundleID";
+            return result;
+        }
+
+        NSDictionary *resolved = PXIPResolve(bundleID);
+        [result addEntriesFromDictionary:resolved];
+        NSString *bundlePath = resolved[@"bundlePath"];
+        NSString *executableName = resolved[@"executableName"];
+        NSString *dylibLoadPath = @"@executable_path/Frameworks/ProjectXInject.dylib";
+        NSFileManager *fm = [NSFileManager defaultManager];
+        if (!bundlePath.length || !executableName.length || ![fm fileExistsAtPath:[bundlePath stringByAppendingPathComponent:executableName]]) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = @"Failed to resolve target app bundle/executable";
+            return result;
+        }
+
+        NSError *snapshotErr = nil;
+        NSDictionary *snapshot = [PXRuntimeSnapshot exportSnapshotForBundleID:bundleID error:&snapshotErr];
+        result[@"snapshotOK"] = snapshot ? @"YES" : @"NO";
+        result[@"snapshotError"] = snapshotErr.localizedDescription ?: @"";
+
+        NSString *safeVersion = PXIPSafeName([NSString stringWithFormat:@"%@-%@", resolved[@"version"] ?: @"", resolved[@"build"] ?: @""]);
+        NSString *stagingBase = [[PXIPStagingRoot() stringByAppendingPathComponent:PXIPSafeName(bundleID)] stringByAppendingPathComponent:safeVersion];
+        NSString *payloadDir = [stagingBase stringByAppendingPathComponent:@"Payload"];
+        NSString *stagedApp = [payloadDir stringByAppendingPathComponent:bundlePath.lastPathComponent ?: @"Target.app"];
+        NSString *stagedExecutable = [stagedApp stringByAppendingPathComponent:executableName];
+        NSString *stagedFrameworks = [stagedApp stringByAppendingPathComponent:@"Frameworks"];
+        NSString *stagedDylib = [stagedFrameworks stringByAppendingPathComponent:@"ProjectXInject.dylib"];
+        NSString *tipaName = [NSString stringWithFormat:@"%@-%@-projectx.tipa", PXIPSafeName(bundleID), safeVersion.length ? safeVersion : @"unknown"];
+        NSString *tipaPath = [PXIPPatchedAppsRoot() stringByAppendingPathComponent:tipaName];
+
+        [fm removeItemAtPath:stagingBase error:nil];
+        [fm createDirectoryAtPath:payloadDir withIntermediateDirectories:YES attributes:nil error:nil];
+        NSError *copyErr = nil;
+        [PXDiagnostics log:@"[patch] export copying app bundle source=%@ staged=%@", bundlePath ?: @"", stagedApp ?: @""];
+        if (![fm copyItemAtPath:bundlePath toPath:stagedApp error:&copyErr]) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = copyErr.localizedDescription ?: @"Failed to copy app bundle to staging";
+            return result;
+        }
+
+        NSError *mkErr = nil;
+        [fm createDirectoryAtPath:stagedFrameworks withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions: @0755} error:&mkErr];
+        if (mkErr) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = mkErr.localizedDescription ?: @"Failed to create staged Frameworks directory";
+            return result;
+        }
+        NSString *injectSource = [PXRuntimeSnapshot bundledInjectDylibPath];
+        NSError *dylibErr = nil;
+        [fm removeItemAtPath:stagedDylib error:nil];
+        if (![fm copyItemAtPath:injectSource toPath:stagedDylib error:&dylibErr]) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = dylibErr.localizedDescription ?: @"Failed to copy ProjectXInject.dylib into staged app";
+            return result;
+        }
+        [fm setAttributes:@{NSFilePosixPermissions: @0755} ofItemAtPath:stagedDylib error:nil];
+
+        NSError *patchErr = nil;
+        BOOL patched = [PXMachOInjector insertDylibLoadCommand:dylibLoadPath intoMachOAtPath:stagedExecutable error:&patchErr];
+        if (!patched) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = patchErr.localizedDescription ?: @"Failed to patch staged executable";
+            return result;
+        }
+        [fm setAttributes:@{NSFilePosixPermissions: @0755} ofItemAtPath:stagedExecutable error:nil];
+
+        PXIPAddLoadCommandStatus(result, @"stagedExecutable", stagedExecutable, dylibLoadPath);
+        PXIPAddCodeSignatureOnlyStatus(result, @"stagedDylib", stagedDylib);
+        if (![result[@"stagedExecutableHasLoadCommand"] isEqual:@"YES"]) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = @"Staged executable patch verification failed";
+            return result;
+        }
+
+        NSError *zipErr = nil;
+        [fm removeItemAtPath:tipaPath error:nil];
+        [PXDiagnostics log:@"[patch] export packaging sourceRoot=%@ tipa=%@", stagingBase ?: @"", tipaPath ?: @""];
+        if (!PXIPCreateStoredZip(stagingBase, tipaPath, &zipErr)) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = zipErr.localizedDescription ?: @"Failed to package patched TIPA";
+            return result;
+        }
+        NSDictionary *tipaAttrs = [fm attributesOfItemAtPath:tipaPath error:nil] ?: @{};
+        result[@"ok"] = @"YES";
+        result[@"error"] = @"";
+        result[@"stagingBase"] = stagingBase ?: @"";
+        result[@"payloadDir"] = payloadDir ?: @"";
+        result[@"stagedApp"] = stagedApp ?: @"";
+        result[@"stagedExecutable"] = stagedExecutable ?: @"";
+        result[@"stagedDylib"] = stagedDylib ?: @"";
+        result[@"tipaPath"] = tipaPath ?: @"";
+        result[@"tipaSize"] = tipaAttrs[NSFileSize] ?: @0;
+        result[@"signingStatus"] = @"not-signed-on-device";
+        result[@"note"] = @"Patched TIPA exported. Install with TrollStore; signing/install automation is a later phase.";
+        [PXDiagnostics log:@"[patch] export patched TIPA result=%@", result];
+        return result;
+    } @catch (NSException *ex) {
+        result[@"ok"] = @"NO";
+        result[@"error"] = [NSString stringWithFormat:@"Exception during export patched TIPA: %@ %@", ex.name ?: @"", ex.reason ?: @""];
+        [PXDiagnostics log:@"[patch] export patched TIPA exception=%@", result[@"error"]];
         return result;
     }
 }

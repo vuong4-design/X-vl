@@ -72,6 +72,7 @@ ProjectXTroll_LDFLAGS = \
 	-weak_framework UIKit \
 	-weak_framework CoreLocationUI \
 	-weak_framework Security \
+	-lz \
 	-lsqlite3
 
 # Codesign with TrollStore-specific entitlements. Keep this separate from the

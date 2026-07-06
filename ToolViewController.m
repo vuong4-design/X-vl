@@ -591,6 +591,14 @@
             });
         });
     }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Export Patched TIPA" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSDictionary *result = [PXDiagnostics exportPatchedTIPABundleID:@"com.finalwire.aida64"];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                showResult(@"Export Patched TIPA", result);
+            });
+        });
+    }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Install Patched Copy" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
         typeof(weakSelf) selfRef = weakSelf;
         if (!selfRef) return;

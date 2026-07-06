@@ -19,6 +19,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSDictionary<NSString *, id> *)dyldLaunchBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)prepareInPlaceBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)patchPreparedInPlaceCopyBundleID:(NSString *)bundleID;
++ (NSDictionary<NSString *, id> *)exportPatchedTIPABundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)installPatchedInPlaceCopyBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)installPatchedInPlaceCopyWithoutLaunchBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)restoreInPlaceBundleID:(NSString *)bundleID;

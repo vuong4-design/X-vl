@@ -10,6 +10,7 @@ extern NSString * const PXInPlacePatcherErrorDomain;
 
 + (NSDictionary<NSString *, id> *)prepareBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)patchPreparedCopyBundleID:(NSString *)bundleID;
++ (NSDictionary<NSString *, id> *)exportPatchedTIPABundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)installPatchedCopyBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)installPatchedCopyWithoutLaunchBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)restoreBundleID:(NSString *)bundleID;
