@@ -409,7 +409,7 @@ static int spawn_wait_tool(NSString *tool, NSArray<NSString *> *args) {
 static int op_toolcpfile(NSString *src, NSString *dst) {
     if (!pathIsAllowed(src)) { perr(@"toolcpfile: src not allowed: %@", src); return 2; }
     if (!pathIsAllowed(dst)) { perr(@"toolcpfile: dst not allowed: %@", dst); return 2; }
-    NSString *cp = find_system_tool(@[@"cp", @"cp-15"]);
+    NSString *cp = find_system_tool(@[@"cp-15", @"cp"]);
     if (!cp.length) { perr(@"toolcpfile: cp not found"); return 3; }
     NSString *parent = [dst stringByDeletingLastPathComponent];
     if (parent.length) {

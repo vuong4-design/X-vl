@@ -17,3 +17,5 @@ Supported filenames:
 - libxar.1.dylib
 
 The app build copies these files into ProjectXTroll.app/Tools when present. The root helper looks in that directory before system paths.
+
+The helper prefers cp-15 over cp because older iOS 15/16 libSystem builds may not export symbols required by newer cp binaries.
