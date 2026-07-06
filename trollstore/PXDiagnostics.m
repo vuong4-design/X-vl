@@ -252,6 +252,22 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     return info;
 }
 
++ (NSDictionary<NSString *,id> *)enableCHooksSnapshotForBundleID:(NSString *)bundleID {
+    NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
+    [self log:@"[inject] enabling c hooks snapshot bundleID=%@", targetBundleID];
+    NSError *err = nil;
+    NSDictionary *snapshot = [PXRuntimeSnapshot exportSnapshotForBundleID:targetBundleID enableObjCHooks:YES enableCHooks:YES error:&err];
+    NSDictionary *status = [PXRuntimeSnapshot statusForBundleID:targetBundleID];
+    NSMutableDictionary *info = [NSMutableDictionary dictionaryWithDictionary:status ?: @{}];
+    info[@"exportOK"] = snapshot ? @"YES" : @"NO";
+    info[@"exportError"] = err.localizedDescription ?: @"";
+    info[@"EnableObjCHooks"] = snapshot[@"EnableObjCHooks"] ?: @"";
+    info[@"EnableCHooks"] = snapshot[@"EnableCHooks"] ?: @"";
+    info[@"note"] = @"ObjC and C hooks will be active on next target launch. Reopen the target app, then check Injection Marker Status.";
+    [self log:@"[inject] c hooks snapshot status=%@", info];
+    return info;
+}
+
 + (NSDictionary<NSString *,id> *)injectionMarkerStatusForBundleID:(NSString *)bundleID {
     NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
     [self log:@"[inject] marker status bundleID=%@", targetBundleID];

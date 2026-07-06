@@ -3,7 +3,13 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <dlfcn.h>
+#import <errno.h>
 #import <stdarg.h>
+#import <string.h>
+#import <sys/sysctl.h>
+
+extern CFTypeRef MGCopyAnswer(CFStringRef key) __attribute__((weak_import));
 
 static NSString *const PXInjectBaseDir = @"/var/mobile/Library/ProjectXTroll";
 static NSString *const PXInjectDylibVersion = @"0.1.0";
@@ -44,6 +50,52 @@ static NSOperatingSystemVersion PXSnapshotOSVersion(void) {
     osVersion.minorVersion = parts.count > 1 ? parts[1].integerValue : 0;
     osVersion.patchVersion = parts.count > 2 ? parts[2].integerValue : 0;
     return osVersion;
+}
+
+static NSString *PXHookBackendName(void) {
+    BOOL objcHooks = PXSnapshotBool(@"EnableObjCHooks", NO);
+    BOOL cHooks = PXSnapshotBool(@"EnableCHooks", NO);
+    if (objcHooks && cHooks) return @"objc-runtime+c-hooks";
+    if (objcHooks) return @"objc-runtime";
+    if (cHooks) return @"c-hooks";
+    return @"marker-only";
+}
+
+static BOOL PXCopyCStringToSysctlBuffer(NSString *value, void *oldp, size_t *oldlenp) {
+    if (!value.length || !oldlenp) return NO;
+    const char *bytes = [value UTF8String];
+    if (!bytes) return NO;
+    size_t required = strlen(bytes) + 1;
+    if (!oldp) {
+        *oldlenp = required;
+        return YES;
+    }
+    if (*oldlenp < required) {
+        *oldlenp = required;
+        errno = ENOMEM;
+        return NO;
+    }
+    memcpy(oldp, bytes, required);
+    *oldlenp = required;
+    return YES;
+}
+
+static CFTypeRef PXCopyMGValueForKey(CFStringRef key) {
+    if (!key || !PXSnapshotBool(@"EnableCHooks", NO)) return NULL;
+    NSString *name = (__bridge NSString *)key;
+    NSString *value = nil;
+    if ([name isEqualToString:@"ProductType"] || [name isEqualToString:@"HWModelStr"] || [name isEqualToString:@"DeviceNameString"]) {
+        value = PXSnapshotString(@"DeviceModel") ?: PXSnapshotString(@"DeviceModelName");
+    } else if ([name isEqualToString:@"ProductVersion"]) {
+        value = PXSnapshotString(@"IOSVersion");
+    } else if ([name isEqualToString:@"ProductBuildVersion"] || [name isEqualToString:@"BuildVersion"]) {
+        value = PXSnapshotString(@"IOSBuild");
+    } else if ([name isEqualToString:@"HardwareModel"] || [name isEqualToString:@"BoardId"] || [name isEqualToString:@"BoardID"]) {
+        value = PXSnapshotString(@"HwModel") ?: PXSnapshotString(@"BoardID");
+    } else if ([name isEqualToString:@"DeviceClass"]) {
+        value = @"iPhone";
+    }
+    return value.length ? CFRetain((__bridge CFStringRef)value) : NULL;
 }
 
 static NSString *PXSafeBundleID(void) {
@@ -132,7 +184,9 @@ static void PXWriteLoadedMarker(void) {
         @"profileId": PXSnapshotString(@"profileId") ?: @"",
         @"generation": PXSnapshotObject(@"generation") ?: @0,
         @"timestamp": @([[NSDate date] timeIntervalSince1970]),
-        @"hookBackend": PXSnapshotBool(@"EnableObjCHooks", NO) ? @"objc-runtime" : @"marker-only",
+        @"hookBackend": PXHookBackendName(),
+        @"EnableObjCHooks": @(PXSnapshotBool(@"EnableObjCHooks", NO)),
+        @"EnableCHooks": @(PXSnapshotBool(@"EnableCHooks", NO)),
         @"snapshotPath": PXSnapshotPathForBundleID(gBundleID ?: @""),
     };
     [marker writeToFile:PXLocalMarkerPath() atomically:YES];
@@ -218,6 +272,51 @@ static void PXInstallObjCHooks(void) {
     PXReplaceInstanceMethod(processInfo, @selector(operatingSystemVersion), (IMP)px_NSProcessInfo_operatingSystemVersion, (IMP *)&orig_NSProcessInfo_operatingSystemVersion);
 }
 
+static int (*orig_sysctlbyname)(const char *, void *, size_t *, void *, size_t) = NULL;
+static CFTypeRef (*orig_MGCopyAnswer)(CFStringRef) = NULL;
+
+static int px_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
+    if (PXSnapshotBool(@"EnableCHooks", NO) && name && !newp && newlen == 0) {
+        NSString *value = nil;
+        if (strcmp(name, "hw.machine") == 0) {
+            value = PXSnapshotString(@"DeviceModel");
+        } else if (strcmp(name, "hw.model") == 0) {
+            value = PXSnapshotString(@"HwModel") ?: PXSnapshotString(@"BoardID");
+        } else if (strcmp(name, "kern.osversion") == 0) {
+            value = PXSnapshotString(@"IOSBuild");
+        } else if (strcmp(name, "kern.version") == 0) {
+            value = PXSnapshotString(@"KernelVersion");
+        }
+        if (value.length) {
+            BOOL copied = PXCopyCStringToSysctlBuffer(value, oldp, oldlenp);
+            PXInjectLog(@"sysctlbyname %s -> %@ copied=%@", name, value, copied ? @"YES" : @"NO");
+            return copied ? 0 : -1;
+        }
+    }
+    return orig_sysctlbyname ? orig_sysctlbyname(name, oldp, oldlenp, newp, newlen) : -1;
+}
+
+static CFTypeRef px_MGCopyAnswer(CFStringRef key) {
+    CFTypeRef value = PXCopyMGValueForKey(key);
+    if (value) {
+        PXInjectLog(@"MGCopyAnswer %@ spoofed", (__bridge NSString *)key);
+        return value;
+    }
+    return orig_MGCopyAnswer ? orig_MGCopyAnswer(key) : NULL;
+}
+
+__attribute__((used)) static struct { const void *replacement; const void *replacee; } PXInterposes[] __attribute__((section("__DATA,__interpose"))) = {
+    { (const void *)px_sysctlbyname, (const void *)sysctlbyname },
+    { (const void *)px_MGCopyAnswer, (const void *)MGCopyAnswer },
+};
+
+static void PXInstallCHooks(void) {
+    orig_sysctlbyname = dlsym(RTLD_NEXT, "sysctlbyname");
+    orig_MGCopyAnswer = dlsym(RTLD_NEXT, "MGCopyAnswer");
+    if (!orig_MGCopyAnswer) orig_MGCopyAnswer = dlsym(RTLD_DEFAULT, "MGCopyAnswer");
+    PXInjectLog(@"C hooks enabled sysctlbyname=%p MGCopyAnswer=%p", orig_sysctlbyname, orig_MGCopyAnswer);
+}
+
 __attribute__((constructor))
 static void ProjectXInjectInit(void) {
     @autoreleasepool {
@@ -227,6 +326,11 @@ static void ProjectXInjectInit(void) {
             PXInstallObjCHooks();
         } else {
             PXInjectLog(@"ObjC hooks disabled; marker-only safe mode");
+        }
+        if (PXSnapshotBool(@"EnableCHooks", NO)) {
+            PXInstallCHooks();
+        } else {
+            PXInjectLog(@"C hooks disabled");
         }
         PXInjectLog(@"ProjectXInject initialized bundle=%@", gBundleID ?: @"");
     }

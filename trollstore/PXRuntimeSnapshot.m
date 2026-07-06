@@ -115,6 +115,13 @@ static NSString *PXRTTargetLocalMarkerPath(NSString *bundleID) {
 + (nullable NSDictionary<NSString *, id> *)exportSnapshotForBundleID:(NSString *)bundleID
                                                      enableObjCHooks:(BOOL)enableObjCHooks
                                                                error:(NSError **)error {
+    return [self exportSnapshotForBundleID:bundleID enableObjCHooks:enableObjCHooks enableCHooks:NO error:error];
+}
+
++ (nullable NSDictionary<NSString *, id> *)exportSnapshotForBundleID:(NSString *)bundleID
+                                                     enableObjCHooks:(BOOL)enableObjCHooks
+                                                        enableCHooks:(BOOL)enableCHooks
+                                                               error:(NSError **)error {
     if (!bundleID.length) {
         if (error) *error = PXRTError(1, @"Missing bundleID");
         return nil;
@@ -134,6 +141,7 @@ static NSString *PXRTTargetLocalMarkerPath(NSString *bundleID) {
     snapshot[@"exportedAt"] = @([[NSDate date] timeIntervalSince1970]);
     snapshot[@"SystemName"] = @"iOS";
     snapshot[@"EnableObjCHooks"] = @(enableObjCHooks);
+    snapshot[@"EnableCHooks"] = @(enableCHooks);
 
     NSArray<NSString *> *keys = @[
         @"DeviceName",
