@@ -256,15 +256,98 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
     [self log:@"[inject] enabling c hooks snapshot bundleID=%@", targetBundleID];
     NSError *err = nil;
-    NSDictionary *snapshot = [PXRuntimeSnapshot exportSnapshotForBundleID:targetBundleID enableObjCHooks:YES enableCHooks:YES error:&err];
+    NSDictionary *snapshot = [PXRuntimeSnapshot exportSnapshotForBundleID:targetBundleID
+                                                           enableObjCHooks:YES
+                                                              enableCHooks:YES
+                                                              cHookOptions:@{@"CHookTestMode": @"sysctlbyname-safe",
+                                                                             @"EnableSysctlByNameHook": @YES,
+                                                                             @"EnableSysctlHook": @NO,
+                                                                             @"EnableUnameHook": @NO,
+                                                                             @"EnableSysctlName_hw.machine": @YES,
+                                                                             @"EnableSysctlName_hw.model": @YES,
+                                                                             @"EnableSysctlName_kern.osversion": @YES,
+                                                                             @"EnableSysctlName_kern.version": @YES}
+                                                                     error:&err];
     NSDictionary *status = [PXRuntimeSnapshot statusForBundleID:targetBundleID];
     NSMutableDictionary *info = [NSMutableDictionary dictionaryWithDictionary:status ?: @{}];
     info[@"exportOK"] = snapshot ? @"YES" : @"NO";
     info[@"exportError"] = err.localizedDescription ?: @"";
     info[@"EnableObjCHooks"] = snapshot[@"EnableObjCHooks"] ?: @"";
     info[@"EnableCHooks"] = snapshot[@"EnableCHooks"] ?: @"";
-    info[@"note"] = @"ObjC and C hooks will be active on next target launch. Reopen the target app, then check Injection Marker Status.";
+    info[@"CHookTestMode"] = snapshot[@"CHookTestMode"] ?: @"";
+    info[@"note"] = @"ObjC and safe sysctlbyname C hook will be active on next target launch. Reopen the target app, then check Injection Marker Status.";
     [self log:@"[inject] c hooks snapshot status=%@", info];
+    return info;
+}
+
++ (NSDictionary<NSString *,id> *)enableCHookTestSnapshotForBundleID:(NSString *)bundleID mode:(NSString *)mode {
+    NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
+    NSString *testMode = mode.length ? mode : @"sysctlbyname-safe";
+    NSMutableDictionary *options = [@{
+        @"CHookTestMode": testMode,
+        @"EnableSysctlByNameHook": @NO,
+        @"EnableSysctlHook": @NO,
+        @"EnableUnameHook": @NO,
+        @"EnableSysctlName_hw.machine": @NO,
+        @"EnableSysctlName_hw.model": @NO,
+        @"EnableSysctlName_kern.osversion": @NO,
+        @"EnableSysctlName_kern.version": @NO
+    } mutableCopy];
+
+    if ([testMode isEqualToString:@"interpose-only"]) {
+        options[@"EnableCHooks"] = @YES;
+    } else if ([testMode isEqualToString:@"sysctlbyname-safe"]) {
+        options[@"EnableSysctlByNameHook"] = @YES;
+        options[@"EnableSysctlName_hw.machine"] = @YES;
+        options[@"EnableSysctlName_hw.model"] = @YES;
+        options[@"EnableSysctlName_kern.osversion"] = @YES;
+        options[@"EnableSysctlName_kern.version"] = @YES;
+    } else if ([testMode isEqualToString:@"sysctlbyname-hw.machine"]) {
+        options[@"EnableSysctlByNameHook"] = @YES;
+        options[@"EnableSysctlName_hw.machine"] = @YES;
+    } else if ([testMode isEqualToString:@"sysctlbyname-hw.model"]) {
+        options[@"EnableSysctlByNameHook"] = @YES;
+        options[@"EnableSysctlName_hw.model"] = @YES;
+    } else if ([testMode isEqualToString:@"sysctlbyname-kern.osversion"]) {
+        options[@"EnableSysctlByNameHook"] = @YES;
+        options[@"EnableSysctlName_kern.osversion"] = @YES;
+    } else if ([testMode isEqualToString:@"sysctlbyname-kern.version"]) {
+        options[@"EnableSysctlByNameHook"] = @YES;
+        options[@"EnableSysctlName_kern.version"] = @YES;
+    } else if ([testMode isEqualToString:@"sysctl-hw.machine"]) {
+        options[@"EnableSysctlHook"] = @YES;
+        options[@"EnableSysctlName_hw.machine"] = @YES;
+    } else if ([testMode isEqualToString:@"sysctl-hw.model"]) {
+        options[@"EnableSysctlHook"] = @YES;
+        options[@"EnableSysctlName_hw.model"] = @YES;
+    } else if ([testMode isEqualToString:@"sysctl-kern.osversion"]) {
+        options[@"EnableSysctlHook"] = @YES;
+        options[@"EnableSysctlName_kern.osversion"] = @YES;
+    } else if ([testMode isEqualToString:@"sysctl-kern.version"]) {
+        options[@"EnableSysctlHook"] = @YES;
+        options[@"EnableSysctlName_kern.version"] = @YES;
+    } else if ([testMode isEqualToString:@"uname-machine"]) {
+        options[@"EnableUnameHook"] = @YES;
+        options[@"EnableSysctlName_hw.machine"] = @YES;
+    }
+
+    [self log:@"[inject] enabling c hook test snapshot bundleID=%@ mode=%@ options=%@", targetBundleID, testMode, options];
+    NSError *err = nil;
+    NSDictionary *snapshot = [PXRuntimeSnapshot exportSnapshotForBundleID:targetBundleID
+                                                           enableObjCHooks:YES
+                                                              enableCHooks:YES
+                                                              cHookOptions:options
+                                                                     error:&err];
+    NSDictionary *status = [PXRuntimeSnapshot statusForBundleID:targetBundleID];
+    NSMutableDictionary *info = [NSMutableDictionary dictionaryWithDictionary:status ?: @{}];
+    info[@"exportOK"] = snapshot ? @"YES" : @"NO";
+    info[@"exportError"] = err.localizedDescription ?: @"";
+    info[@"CHookTestMode"] = snapshot[@"CHookTestMode"] ?: testMode;
+    info[@"EnableSysctlByNameHook"] = snapshot[@"EnableSysctlByNameHook"] ?: @"";
+    info[@"EnableSysctlHook"] = snapshot[@"EnableSysctlHook"] ?: @"";
+    info[@"EnableUnameHook"] = snapshot[@"EnableUnameHook"] ?: @"";
+    info[@"note"] = @"Reopen AIDA64 once, then check Injection Marker Status. If AIDA64 exits, this mode is the suspect.";
+    [self log:@"[inject] c hook test snapshot status=%@", info];
     return info;
 }
 

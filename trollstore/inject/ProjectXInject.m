@@ -15,6 +15,10 @@ static NSString *const PXInjectDylibVersion = @"0.1.0";
 
 static NSDictionary *gSnapshot = nil;
 static NSString *gBundleID = nil;
+static BOOL gCHooksReady = NO;
+static BOOL gEnableSysctlByNameHook = NO;
+static BOOL gEnableSysctlHook = NO;
+static BOOL gEnableUnameHook = NO;
 
 static id PXSnapshotObject(NSString *key) {
     id value = gSnapshot[key];
@@ -60,6 +64,12 @@ static NSString *PXHookBackendName(void) {
     return @"marker-only";
 }
 
+static BOOL PXSysctlNameEnabled(NSString *name) {
+    if (!name.length) return NO;
+    NSString *flag = [@"EnableSysctlName_" stringByAppendingString:name];
+    return PXSnapshotBool(flag, NO);
+}
+
 static BOOL PXCopyCStringToSysctlBuffer(NSString *value, void *oldp, size_t *oldlenp) {
     if (!value.length || !oldlenp) return NO;
     const char *bytes = [value UTF8String];
@@ -81,20 +91,25 @@ static BOOL PXCopyCStringToSysctlBuffer(NSString *value, void *oldp, size_t *old
 
 static NSString *PXValueForSysctlName(const char *name) {
     if (!name) return nil;
-    if (strcmp(name, "hw.machine") == 0) return PXSnapshotString(@"DeviceModel");
-    if (strcmp(name, "hw.model") == 0) return PXSnapshotString(@"HwModel") ?: PXSnapshotString(@"BoardID");
-    if (strcmp(name, "kern.osversion") == 0) return PXSnapshotString(@"IOSBuild");
-    if (strcmp(name, "kern.version") == 0) return PXSnapshotString(@"KernelVersion");
+    if (strcmp(name, "hw.machine") == 0 && PXSysctlNameEnabled(@"hw.machine")) return PXSnapshotString(@"DeviceModel");
+    if (strcmp(name, "hw.model") == 0 && PXSysctlNameEnabled(@"hw.model")) return PXSnapshotString(@"HwModel") ?: PXSnapshotString(@"BoardID");
+    if (strcmp(name, "kern.osversion") == 0 && PXSysctlNameEnabled(@"kern.osversion")) return PXSnapshotString(@"IOSBuild");
+    if (strcmp(name, "kern.version") == 0 && PXSysctlNameEnabled(@"kern.version")) return PXSnapshotString(@"KernelVersion");
+    return nil;
+}
+
+static NSString *PXSysctlNameForMIB(const int *name, u_int namelen) {
+    if (!name || namelen < 2) return nil;
+    if (name[0] == CTL_HW && name[1] == HW_MACHINE) return @"hw.machine";
+    if (name[0] == CTL_HW && name[1] == HW_MODEL) return @"hw.model";
+    if (name[0] == CTL_KERN && name[1] == KERN_OSVERSION) return @"kern.osversion";
+    if (name[0] == CTL_KERN && name[1] == KERN_VERSION) return @"kern.version";
     return nil;
 }
 
 static NSString *PXValueForSysctlMIB(const int *name, u_int namelen) {
-    if (!name || namelen < 2) return nil;
-    if (name[0] == CTL_HW && name[1] == HW_MACHINE) return PXSnapshotString(@"DeviceModel");
-    if (name[0] == CTL_HW && name[1] == HW_MODEL) return PXSnapshotString(@"HwModel") ?: PXSnapshotString(@"BoardID");
-    if (name[0] == CTL_KERN && name[1] == KERN_OSVERSION) return PXSnapshotString(@"IOSBuild");
-    if (name[0] == CTL_KERN && name[1] == KERN_VERSION) return PXSnapshotString(@"KernelVersion");
-    return nil;
+    NSString *sysctlName = PXSysctlNameForMIB(name, namelen);
+    return sysctlName.length ? PXValueForSysctlName(sysctlName.UTF8String) : nil;
 }
 
 static NSString *PXSafeBundleID(void) {
@@ -186,6 +201,10 @@ static void PXWriteLoadedMarker(void) {
         @"hookBackend": PXHookBackendName(),
         @"EnableObjCHooks": @(PXSnapshotBool(@"EnableObjCHooks", NO)),
         @"EnableCHooks": @(PXSnapshotBool(@"EnableCHooks", NO)),
+        @"CHookTestMode": PXSnapshotString(@"CHookTestMode") ?: @"",
+        @"EnableSysctlByNameHook": @(PXSnapshotBool(@"EnableSysctlByNameHook", NO)),
+        @"EnableSysctlHook": @(PXSnapshotBool(@"EnableSysctlHook", NO)),
+        @"EnableUnameHook": @(PXSnapshotBool(@"EnableUnameHook", NO)),
         @"snapshotPath": PXSnapshotPathForBundleID(gBundleID ?: @""),
     };
     [marker writeToFile:PXLocalMarkerPath() atomically:YES];
@@ -276,48 +295,54 @@ static int (*orig_sysctl)(int *, u_int, void *, size_t *, void *, size_t) = NULL
 static int (*orig_uname)(struct utsname *) = NULL;
 static CFTypeRef (*orig_MGCopyAnswer)(CFStringRef) = NULL;
 
-static int px_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
-    if (PXSnapshotBool(@"EnableCHooks", NO) && name && !newp && newlen == 0) {
-        NSString *value = PXValueForSysctlName(name);
-        if (value.length) {
-            BOOL copied = PXCopyCStringToSysctlBuffer(value, oldp, oldlenp);
-            PXInjectLog(@"sysctlbyname %s -> %@ copied=%@", name, value, copied ? @"YES" : @"NO");
-            return copied ? 0 : -1;
-        }
-    }
+static int PXCallOrigSysctlByName(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
+    if (!orig_sysctlbyname) orig_sysctlbyname = dlsym(RTLD_NEXT, "sysctlbyname");
     return orig_sysctlbyname ? orig_sysctlbyname(name, oldp, oldlenp, newp, newlen) : -1;
 }
 
-static int px_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
-    if (PXSnapshotBool(@"EnableCHooks", NO) && !newp && newlen == 0) {
-        NSString *value = PXValueForSysctlMIB(name, namelen);
-        if (value.length) {
-            BOOL copied = PXCopyCStringToSysctlBuffer(value, oldp, oldlenp);
-            PXInjectLog(@"sysctl mib=%d.%d -> %@ copied=%@", namelen > 0 ? name[0] : -1, namelen > 1 ? name[1] : -1, value, copied ? @"YES" : @"NO");
-            return copied ? 0 : -1;
-        }
-    }
+static int PXCallOrigSysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
+    if (!orig_sysctl) orig_sysctl = dlsym(RTLD_NEXT, "sysctl");
     return orig_sysctl ? orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen) : -1;
 }
 
+static int PXCallOrigUname(struct utsname *buf) {
+    if (!orig_uname) orig_uname = dlsym(RTLD_NEXT, "uname");
+    return orig_uname ? orig_uname(buf) : -1;
+}
+
+static int px_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
+    if (gCHooksReady && gEnableSysctlByNameHook && name && !newp && newlen == 0) {
+        NSString *value = PXValueForSysctlName(name);
+        if (value.length) {
+            BOOL copied = PXCopyCStringToSysctlBuffer(value, oldp, oldlenp);
+            PXInjectLog(@"c-hook mode=%@ sysctlbyname %s -> %@ copied=%@", PXSnapshotString(@"CHookTestMode") ?: @"", name, value, copied ? @"YES" : @"NO");
+            return copied ? 0 : -1;
+        }
+    }
+    return PXCallOrigSysctlByName(name, oldp, oldlenp, newp, newlen);
+}
+
+static int px_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
+    if (gCHooksReady && gEnableSysctlHook && !newp && newlen == 0) {
+        NSString *value = PXValueForSysctlMIB(name, namelen);
+        if (value.length) {
+            BOOL copied = PXCopyCStringToSysctlBuffer(value, oldp, oldlenp);
+            NSString *sysctlName = PXSysctlNameForMIB(name, namelen) ?: @"unknown";
+            PXInjectLog(@"c-hook mode=%@ sysctl %@ mib=%d.%d -> %@ copied=%@", PXSnapshotString(@"CHookTestMode") ?: @"", sysctlName, namelen > 0 ? name[0] : -1, namelen > 1 ? name[1] : -1, value, copied ? @"YES" : @"NO");
+            return copied ? 0 : -1;
+        }
+    }
+    return PXCallOrigSysctl(name, namelen, oldp, oldlenp, newp, newlen);
+}
+
 static int px_uname(struct utsname *buf) {
-    int result = orig_uname ? orig_uname(buf) : -1;
-    if (result == 0 && buf && PXSnapshotBool(@"EnableCHooks", NO)) {
+    int result = PXCallOrigUname(buf);
+    if (result == 0 && gCHooksReady && gEnableUnameHook && buf && PXSysctlNameEnabled(@"hw.machine")) {
         NSString *machine = PXSnapshotString(@"DeviceModel");
         if (machine.length) {
             memset(buf->machine, 0, sizeof(buf->machine));
             strlcpy(buf->machine, machine.UTF8String, sizeof(buf->machine));
-            PXInjectLog(@"uname machine -> %@", machine);
-        }
-        NSString *release = PXSnapshotString(@"Darwin");
-        if (release.length) {
-            memset(buf->release, 0, sizeof(buf->release));
-            strlcpy(buf->release, release.UTF8String, sizeof(buf->release));
-        }
-        NSString *version = PXSnapshotString(@"KernelVersion");
-        if (version.length) {
-            memset(buf->version, 0, sizeof(buf->version));
-            strlcpy(buf->version, version.UTF8String, sizeof(buf->version));
+            PXInjectLog(@"c-hook mode=%@ uname machine -> %@", PXSnapshotString(@"CHookTestMode") ?: @"", machine);
         }
     }
     return result;
@@ -330,12 +355,25 @@ __attribute__((used)) static struct { const void *replacement; const void *repla
 };
 
 static void PXInstallCHooks(void) {
+    gCHooksReady = NO;
     orig_sysctlbyname = dlsym(RTLD_NEXT, "sysctlbyname");
     orig_sysctl = dlsym(RTLD_NEXT, "sysctl");
     orig_uname = dlsym(RTLD_NEXT, "uname");
     orig_MGCopyAnswer = dlsym(RTLD_NEXT, "MGCopyAnswer");
     if (!orig_MGCopyAnswer) orig_MGCopyAnswer = dlsym(RTLD_DEFAULT, "MGCopyAnswer");
-    PXInjectLog(@"C hooks enabled sysctlbyname=%p sysctl=%p uname=%p MGCopyAnswer=%p MGCopyAnswerInterpose=disabled", orig_sysctlbyname, orig_sysctl, orig_uname, orig_MGCopyAnswer);
+    gEnableSysctlByNameHook = PXSnapshotBool(@"EnableSysctlByNameHook", YES);
+    gEnableSysctlHook = PXSnapshotBool(@"EnableSysctlHook", NO);
+    gEnableUnameHook = PXSnapshotBool(@"EnableUnameHook", NO);
+    gCHooksReady = YES;
+    PXInjectLog(@"C hooks enabled mode=%@ sysctlbyname=%p enabled=%@ sysctl=%p enabled=%@ uname=%p enabled=%@ MGCopyAnswer=%p MGCopyAnswerInterpose=disabled",
+                PXSnapshotString(@"CHookTestMode") ?: @"",
+                orig_sysctlbyname,
+                gEnableSysctlByNameHook ? @"YES" : @"NO",
+                orig_sysctl,
+                gEnableSysctlHook ? @"YES" : @"NO",
+                orig_uname,
+                gEnableUnameHook ? @"YES" : @"NO",
+                orig_MGCopyAnswer);
 }
 
 __attribute__((constructor))

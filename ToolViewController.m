@@ -607,6 +607,42 @@
             });
         });
     }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"C Hook Value Tests" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        typeof(weakSelf) selfRef = weakSelf;
+        if (!selfRef) return;
+        UIAlertController *tests = [UIAlertController alertControllerWithTitle:@"C Hook Value Tests"
+                                                                       message:@"Enable one isolated test mode, reopen AIDA64 once, then check Injection Marker Status."
+                                                                preferredStyle:UIAlertControllerStyleActionSheet];
+        NSArray<NSDictionary<NSString *, NSString *> *> *modes = @[
+            @{@"title": @"Interpose only", @"mode": @"interpose-only"},
+            @{@"title": @"Safe sysctlbyname all", @"mode": @"sysctlbyname-safe"},
+            @{@"title": @"sysctlbyname hw.machine", @"mode": @"sysctlbyname-hw.machine"},
+            @{@"title": @"sysctlbyname hw.model", @"mode": @"sysctlbyname-hw.model"},
+            @{@"title": @"sysctlbyname kern.osversion", @"mode": @"sysctlbyname-kern.osversion"},
+            @{@"title": @"sysctlbyname kern.version", @"mode": @"sysctlbyname-kern.version"},
+            @{@"title": @"sysctl MIB hw.machine", @"mode": @"sysctl-hw.machine"},
+            @{@"title": @"sysctl MIB hw.model", @"mode": @"sysctl-hw.model"},
+            @{@"title": @"sysctl MIB kern.osversion", @"mode": @"sysctl-kern.osversion"},
+            @{@"title": @"sysctl MIB kern.version", @"mode": @"sysctl-kern.version"},
+            @{@"title": @"uname machine", @"mode": @"uname-machine"},
+        ];
+        for (NSDictionary<NSString *, NSString *> *entry in modes) {
+            NSString *title = entry[@"title"] ?: @"Test";
+            NSString *mode = entry[@"mode"] ?: @"sysctlbyname-safe";
+            [tests addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action2) {
+                dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                    NSDictionary *result = [PXDiagnostics enableCHookTestSnapshotForBundleID:@"com.finalwire.aida64" mode:mode];
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        showResult(title, result);
+                    });
+                });
+            }]];
+        }
+        [tests addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+        UIPopoverPresentationController *testsPopover = tests.popoverPresentationController;
+        testsPopover.barButtonItem = selfRef.navigationItem.rightBarButtonItem;
+        [selfRef presentViewController:tests animated:YES completion:nil];
+    }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Scan Framework Carriers" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             NSDictionary *result = [PXDiagnostics scanFrameworkCarriersBundleID:@"com.finalwire.aida64"];

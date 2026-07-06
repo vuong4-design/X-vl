@@ -19,9 +19,14 @@ extern NSString * const PXRuntimeSnapshotErrorDomain;
                                                      enableObjCHooks:(BOOL)enableObjCHooks
                                                                error:(NSError **)error;
 + (nullable NSDictionary<NSString *, id> *)exportSnapshotForBundleID:(NSString *)bundleID
-                                                     enableObjCHooks:(BOOL)enableObjCHooks
-                                                        enableCHooks:(BOOL)enableCHooks
-                                                               error:(NSError **)error;
+                                                      enableObjCHooks:(BOOL)enableObjCHooks
+                                                         enableCHooks:(BOOL)enableCHooks
+                                                                error:(NSError **)error;
++ (nullable NSDictionary<NSString *, id> *)exportSnapshotForBundleID:(NSString *)bundleID
+                                                      enableObjCHooks:(BOOL)enableObjCHooks
+                                                         enableCHooks:(BOOL)enableCHooks
+                                                         cHookOptions:(nullable NSDictionary<NSString *, id> *)cHookOptions
+                                                                error:(NSError **)error;
 + (NSDictionary<NSString *, id> *)statusForBundleID:(NSString *)bundleID;
 
 @end
