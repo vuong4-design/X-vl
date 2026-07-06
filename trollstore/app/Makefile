@@ -143,5 +143,12 @@ internal-stage::
 				chmod 755 $(THEOS_STAGING_DIR)/Applications/ProjectXTroll.app/Tools/$$tool; \
 			fi; \
 		done; \
+		for tool_path in $(TROLLSTORE_DIR)/tools/*.dylib; do \
+			if [ -f $$tool_path ]; then \
+				tool=$$(basename $$tool_path); \
+				cp $$tool_path $(THEOS_STAGING_DIR)/Applications/ProjectXTroll.app/Tools/$$tool; \
+				chmod 755 $(THEOS_STAGING_DIR)/Applications/ProjectXTroll.app/Tools/$$tool; \
+			fi; \
+		done; \
 	fi
 	@echo "TSRootBinaries declared in trollstore/app/Info.plist"

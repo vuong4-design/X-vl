@@ -186,6 +186,13 @@ jobs:
                 chmod 755 "$APP_PATH/Tools/$tool"
               fi
             done
+            for tool_path in trollstore/tools/*.dylib; do
+              if [ -f "$tool_path" ]; then
+                tool="$(basename "$tool_path")"
+                cp "$tool_path" "$APP_PATH/Tools/$tool"
+                chmod 755 "$APP_PATH/Tools/$tool"
+              fi
+            done
             find "$APP_PATH/Tools" -maxdepth 1 -type f -exec ls -lh {} \; || true
           fi
 
