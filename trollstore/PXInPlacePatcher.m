@@ -724,16 +724,40 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         result[@"chmodBackupCarrier"] = PXIPRunRootDetailed(@[@"chmod", @"0755", backupCarrier]);
         result[@"chownBackupCarrier"] = PXIPRunRootDetailed(@[@"chown", @"501", @"501", backupCarrier]);
 
-        [fm removeItemAtPath:patchedCarrier error:nil];
-        if (![fm copyItemAtPath:backupCarrier toPath:patchedCarrier error:nil]) {
+        NSError *removePatchedErr = nil;
+        [fm removeItemAtPath:patchedCarrier error:&removePatchedErr];
+        if (removePatchedErr && [fm fileExistsAtPath:patchedCarrier]) {
+            result[@"removeExistingPatchedCarrierError"] = removePatchedErr.localizedDescription ?: @"";
+            result[@"removeExistingPatchedCarrierRoot"] = PXIPRunRootDetailed(@[@"rm", patchedCarrier]);
+        }
+
+        NSError *readCarrierErr = nil;
+        NSData *carrierData = [NSData dataWithContentsOfFile:carrierPath options:0 error:&readCarrierErr];
+        result[@"readCarrierForPatchBytes"] = carrierData ? @(carrierData.length) : @0;
+        result[@"readCarrierForPatchError"] = readCarrierErr.localizedDescription ?: @"";
+        if (!carrierData.length) {
+            return PXIPCarrierFail(result, readCarrierErr.localizedDescription ?: @"Failed to read selected carrier for local patched copy");
+        }
+
+        NSError *writePatchedErr = nil;
+        BOOL writePatchedOK = [carrierData writeToFile:patchedCarrier options:NSDataWritingAtomic error:&writePatchedErr];
+        result[@"writePatchedCarrierOK"] = writePatchedOK ? @"YES" : @"NO";
+        result[@"writePatchedCarrierError"] = writePatchedErr.localizedDescription ?: @"";
+        if (!writePatchedOK) {
             NSDictionary *copyPatched = PXIPRunRootDetailed(@[@"cpfile", backupCarrier, patchedCarrier]);
-            result[@"copyPatchedCarrier"] = copyPatched ?: @{};
+            result[@"copyPatchedCarrierFallback"] = copyPatched ?: @{};
             if (![copyPatched[@"ok"] isEqual:@"YES"]) {
-                return PXIPCarrierFail(result, copyPatched[@"error"] ?: @"Failed to create patched carrier copy");
+                return PXIPCarrierFail(result, writePatchedErr.localizedDescription ?: copyPatched[@"error"] ?: @"Failed to create patched carrier copy");
             }
         }
         result[@"chmodPatchedCarrier"] = PXIPRunRootDetailed(@[@"chmod", @"0755", patchedCarrier]);
         result[@"chownPatchedCarrier"] = PXIPRunRootDetailed(@[@"chown", @"501", @"501", patchedCarrier]);
+
+        BOOL patchedCarrierVisible = [fm fileExistsAtPath:patchedCarrier];
+        result[@"patchedCarrierVisibleBeforePatch"] = patchedCarrierVisible ? @"YES" : @"NO";
+        if (!patchedCarrierVisible) {
+            return PXIPCarrierFail(result, @"Patched carrier copy was created by helper but is not visible to app process");
+        }
 
         [PXDiagnostics log:@"[carrier] patch insert load command carrierCopy=%@ loadPath=%@", patchedCarrier ?: @"", dylibLoadPath ?: @""];
         NSError *patchErr = nil;
