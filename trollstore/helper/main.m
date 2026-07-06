@@ -386,8 +386,30 @@ static int spawn_wait_tool(NSString *tool, NSArray<NSString *> *args) {
         [allocated addObject:[NSValue valueWithPointer:argv[i]]];
     }
     argv[argvObjects.count] = NULL;
+
+    posix_spawnattr_t attrs;
+    posix_spawnattr_t *attrsPtr = NULL;
+    if (posix_spawnattr_init(&attrs) == 0) {
+        attrsPtr = &attrs;
+        posix_spawnattr_set_persona_np(attrsPtr, 99, POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE);
+        posix_spawnattr_set_persona_uid_np(attrsPtr, 0);
+        posix_spawnattr_set_persona_gid_np(attrsPtr, 0);
+    }
+
+    NSString *disableTweaks = @"DISABLE_TWEAKS=1";
+    size_t envCount = 0;
+    while (environ && environ[envCount]) envCount++;
+    char **toolEnv = calloc(envCount + 2, sizeof(char *));
+    if (toolEnv) {
+        for (size_t i = 0; i < envCount; i++) toolEnv[i] = environ[i];
+        toolEnv[envCount] = (char *)disableTweaks.UTF8String;
+        toolEnv[envCount + 1] = NULL;
+    }
+
     pid_t pid = 0;
-    int rc = posix_spawn(&pid, tool.fileSystemRepresentation, NULL, NULL, argv, environ);
+    int rc = posix_spawn(&pid, tool.fileSystemRepresentation, NULL, attrsPtr, argv, toolEnv ?: environ);
+    if (attrsPtr) posix_spawnattr_destroy(attrsPtr);
+    if (toolEnv) free(toolEnv);
     for (NSValue *value in allocated) free([value pointerValue]);
     free(argv);
     if (rc != 0) {
