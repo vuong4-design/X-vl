@@ -359,11 +359,15 @@ static int op_cpfile(NSString *src, NSString *dst) {
 }
 
 static NSString *find_system_tool(NSArray<NSString *> *names) {
-    NSArray<NSString *> *dirs = @[@"/bin", @"/usr/bin", @"/sbin", @"/usr/sbin"];
+    NSString *execPath = NSProcessInfo.processInfo.arguments.firstObject ?: @"";
+    NSString *execDir = execPath.length ? [execPath stringByDeletingLastPathComponent] : @"";
+    NSString *bundleToolsDir = execDir.length ? [execDir stringByAppendingPathComponent:@"Tools"] : @"";
+    NSArray<NSString *> *dirs = @[bundleToolsDir ?: @"", execDir ?: @"", @"/bin", @"/usr/bin", @"/sbin", @"/usr/sbin"];
     NSFileManager *fm = [NSFileManager defaultManager];
     for (NSString *name in names) {
         if ([name isAbsolutePath] && [fm isExecutableFileAtPath:name]) return name;
         for (NSString *dir in dirs) {
+            if (!dir.length) continue;
             NSString *path = [dir stringByAppendingPathComponent:name];
             if ([fm isExecutableFileAtPath:path]) return path;
         }
@@ -405,7 +409,7 @@ static int spawn_wait_tool(NSString *tool, NSArray<NSString *> *args) {
 static int op_toolcpfile(NSString *src, NSString *dst) {
     if (!pathIsAllowed(src)) { perr(@"toolcpfile: src not allowed: %@", src); return 2; }
     if (!pathIsAllowed(dst)) { perr(@"toolcpfile: dst not allowed: %@", dst); return 2; }
-    NSString *cp = find_system_tool(@[@"cp"]);
+    NSString *cp = find_system_tool(@[[[NSProcessInfo processInfo] operatingSystemVersion].majorVersion >= 16 ? @"cp" : @"cp-15", @"cp", @"cp-15"]);
     if (!cp.length) { perr(@"toolcpfile: cp not found"); return 3; }
     NSString *parent = [dst stringByDeletingLastPathComponent];
     if (parent.length) {
@@ -860,16 +864,7 @@ static int op_contains(NSString *path, NSString *needle) {
 }
 
 static NSString *find_ldid(void) {
-    NSArray<NSString *> *candidates = @[
-        @"/usr/bin/ldid",
-        @"/var/jb/usr/bin/ldid",
-        @"/private/preboot/jb/usr/bin/ldid",
-        @"/bin/ldid"
-    ];
-    for (NSString *path in candidates) {
-        if (access(path.fileSystemRepresentation, X_OK) == 0) return path;
-    }
-    return nil;
+    return find_system_tool(@[@"ldid", @"/usr/bin/ldid", @"/var/jb/usr/bin/ldid", @"/private/preboot/jb/usr/bin/ldid", @"/bin/ldid"]);
 }
 
 static int op_ldidprobe(void) {

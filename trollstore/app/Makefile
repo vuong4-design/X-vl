@@ -134,4 +134,14 @@ internal-stage::
 	cp "$$INJECT_DYLIB" $(THEOS_STAGING_DIR)/Applications/ProjectXTroll.app/ProjectXInject.dylib; \
 	chmod 755 $(THEOS_STAGING_DIR)/Applications/ProjectXTroll.app/ProjectXInject.dylib
 	@cp $(TROLLSTORE_DIR)/inject/ProjectXInject.entitlements.plist $(THEOS_STAGING_DIR)/Applications/ProjectXTroll.app/ProjectXInject.entitlements.plist
+	@if [ -d $(TROLLSTORE_DIR)/tools ]; then \
+		echo "Installing optional TrollStore tool binaries..."; \
+		mkdir -p $(THEOS_STAGING_DIR)/Applications/ProjectXTroll.app/Tools; \
+		for tool in cp cp-15 mv mv-15 rm ldid ct_bypass insert_dylib install_name_tool; do \
+			if [ -f $(TROLLSTORE_DIR)/tools/$$tool ]; then \
+				cp $(TROLLSTORE_DIR)/tools/$$tool $(THEOS_STAGING_DIR)/Applications/ProjectXTroll.app/Tools/$$tool; \
+				chmod 755 $(THEOS_STAGING_DIR)/Applications/ProjectXTroll.app/Tools/$$tool; \
+			fi; \
+		done; \
+	fi
 	@echo "TSRootBinaries declared in trollstore/app/Info.plist"

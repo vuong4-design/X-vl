@@ -1,0 +1,15 @@
+Place optional TrollStore helper tools here.
+
+Supported filenames:
+
+- cp
+- cp-15
+- mv
+- mv-15
+- rm
+- ldid
+- ct_bypass
+- insert_dylib
+- install_name_tool
+
+The app build copies these files into ProjectXTroll.app/Tools when present. The root helper looks in that directory before system paths.

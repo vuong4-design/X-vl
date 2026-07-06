@@ -177,6 +177,17 @@ jobs:
             chmod 755 "$APP_PATH/ProjectXInject.dylib"
           fi
           test -f "$APP_PATH/ProjectXInject.dylib"
+          if [ -d trollstore/tools ]; then
+            echo "Installing optional TrollStore tool binaries into app bundle..."
+            mkdir -p "$APP_PATH/Tools"
+            for tool in cp cp-15 mv mv-15 rm ldid ct_bypass insert_dylib install_name_tool; do
+              if [ -f "trollstore/tools/$tool" ]; then
+                cp "trollstore/tools/$tool" "$APP_PATH/Tools/$tool"
+                chmod 755 "$APP_PATH/Tools/$tool"
+              fi
+            done
+            find "$APP_PATH/Tools" -maxdepth 1 -type f -exec ls -lh {} \; || true
+          fi
 
           echo "Re-signing and verifying TrollStore entitlements..."
           APP_ENT="$PWD/trollstore/app/entitlements.plist"
@@ -188,6 +199,14 @@ jobs:
           ldid -S"$APP_ENT" "$APP_PATH/$EXECUTABLE"
           ldid -S"$HELPER_ENT" "$APP_PATH/weaponx_root_helper"
           ldid -S"$INJECT_ENT" "$APP_PATH/ProjectXInject.dylib"
+          if [ -d "$APP_PATH/Tools" ]; then
+            for tool in "$APP_PATH"/Tools/*; do
+              [ -f "$tool" ] || continue
+              echo "Signing bundled tool: $tool"
+              ldid -S"$HELPER_ENT" "$tool" || ldid -S "$tool"
+              chmod 755 "$tool"
+            done
+          fi
 
           APP_ENT_DUMP="/tmp/projectxtroll-main.entitlements.plist"
           HELPER_ENT_DUMP="/tmp/projectxtroll-helper.entitlements.plist"
