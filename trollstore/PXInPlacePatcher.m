@@ -303,6 +303,16 @@ static NSDictionary<NSString *, id> *PXIPTryCoreTrustBypass(NSString *path, NSSt
     return result;
 }
 
+static unsigned long long PXIPFileInfoSize(NSDictionary *fileInfo) {
+    NSString *stdoutText = [fileInfo[@"stdout"] isKindOfClass:[NSString class]] ? fileInfo[@"stdout"] : @"";
+    for (NSString *line in [stdoutText componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]]) {
+        if ([line hasPrefix:@"size="]) {
+            return (unsigned long long)[[line substringFromIndex:@"size=".length] longLongValue];
+        }
+    }
+    return 0;
+}
+
 static BOOL PXIPIsIgnoredCarrierName(NSString *name) {
     NSString *lower = name.lowercaseString ?: @"";
     if ([lower hasPrefix:@"libswift"]) return YES;
@@ -803,6 +813,7 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         NSDictionary *signDylibSource = PXIPTrySignPath(sourceDylib, [[NSBundle mainBundle] pathForResource:@"ProjectXInject" ofType:@"entitlements.plist"]);
         result[@"signBundledDylib"] = signDylibSource ?: @{};
         result[@"ctBypassBundledDylib"] = PXIPTryCoreTrustBypass(sourceDylib, teamID) ?: @{};
+        result[@"rootSourceDylibInfoAfterSign"] = PXIPRunRootDetailed(@[@"fileinfo", sourceDylib]);
 
         if (executableName.length) {
             PXKillallTermThenKill(executableName, 0.5);
@@ -824,6 +835,19 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
             result[@"toolCopyDylibAfterMissingInfo"] = toolCopyDylib ?: @{};
             result[@"rootTargetDylibInfoAfterToolCopy"] = PXIPRunRootDetailed(@[@"fileinfo", targetDylib]);
         }
+        unsigned long long sourceDylibSize = PXIPFileInfoSize(result[@"rootSourceDylibInfoAfterSign"] ?: @{});
+        NSDictionary *targetInfoForMatch = result[@"rootTargetDylibInfoAfterToolCopy"] ?: result[@"rootTargetDylibInfoAfterCopy"] ?: @{};
+        unsigned long long targetDylibSize = PXIPFileInfoSize(targetInfoForMatch);
+        result[@"sourceDylibSize"] = @(sourceDylibSize);
+        result[@"targetDylibSizeAfterCopy"] = @(targetDylibSize);
+        if (sourceDylibSize > 0 && targetDylibSize != sourceDylibSize) {
+            NSDictionary *toolCopyDylib = PXIPRunRootDetailed(@[@"toolcpfile", sourceDylib, targetDylib]);
+            result[@"toolCopyDylibAfterSizeMismatch"] = toolCopyDylib ?: @{};
+            result[@"rootTargetDylibInfoAfterSizeMismatchToolCopy"] = PXIPRunRootDetailed(@[@"fileinfo", targetDylib]);
+        }
+        NSDictionary *targetInfoAfterMatch = result[@"rootTargetDylibInfoAfterSizeMismatchToolCopy"] ?: result[@"rootTargetDylibInfoAfterToolCopy"] ?: result[@"rootTargetDylibInfoAfterCopy"] ?: @{};
+        result[@"targetDylibSizeAfterMatch"] = @(PXIPFileInfoSize(targetInfoAfterMatch));
+        result[@"targetDylibMatchesSource"] = (sourceDylibSize > 0 && PXIPFileInfoSize(targetInfoAfterMatch) == sourceDylibSize) ? @"YES" : @"NO";
         NSDictionary *signTargetDylib = PXIPTrySignPath(targetDylib, [[NSBundle mainBundle] pathForResource:@"ProjectXInject" ofType:@"entitlements.plist"]);
         result[@"signTargetDylib"] = signTargetDylib ?: @{};
         result[@"ctBypassTargetDylib"] = PXIPTryCoreTrustBypass(targetDylib, teamID) ?: @{};
@@ -864,9 +888,9 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         result[@"rootTargetDylibInfoAfterChown"] = PXIPRunRootDetailed(@[@"fileinfo", targetDylib]);
 
         NSDictionary *finalCarrierContains = result[@"rootInstalledCarrierContainsLoadPathAfterToolCopy"] ?: result[@"rootInstalledCarrierContainsLoadPathAfterOverwrite"] ?: result[@"rootInstalledCarrierContainsLoadPath"] ?: @{};
-        NSDictionary *finalDylibInfo = result[@"rootTargetDylibInfoAfterChown"] ?: result[@"rootTargetDylibInfoAfterToolCopy"] ?: result[@"rootTargetDylibInfoAfterCopy"] ?: @{};
+        NSDictionary *finalDylibInfo = result[@"rootTargetDylibInfoAfterChown"] ?: result[@"rootTargetDylibInfoAfterSizeMismatchToolCopy"] ?: result[@"rootTargetDylibInfoAfterToolCopy"] ?: result[@"rootTargetDylibInfoAfterCopy"] ?: @{};
         BOOL carrierVerified = [finalCarrierContains[@"ok"] isEqual:@"YES"];
-        BOOL dylibVerified = [finalDylibInfo[@"ok"] isEqual:@"YES"];
+        BOOL dylibVerified = [finalDylibInfo[@"ok"] isEqual:@"YES"] && [result[@"targetDylibMatchesSource"] isEqual:@"YES"];
         result[@"carrierInstallVerified"] = carrierVerified ? @"YES" : @"NO";
         result[@"targetDylibInstallVerified"] = dylibVerified ? @"YES" : @"NO";
 
