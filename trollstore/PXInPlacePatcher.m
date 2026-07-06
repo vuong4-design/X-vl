@@ -421,7 +421,7 @@ static NSDictionary<NSString *, id> *PXIPTrySignPath(NSString *path, NSString *e
 
         NSString *rootErr = nil;
         [PXDiagnostics log:@"[patch] installing patched copy source=%@ executable=%@", patchedCopy ?: @"", executablePath ?: @""];
-        NSDictionary *replaceExecutable = PXIPRunRootDetailed(@[@"replacefile", patchedCopy, executablePath]);
+        NSDictionary *replaceExecutable = PXIPRunRootDetailed(@[@"installfile", patchedCopy, executablePath]);
         result[@"replaceExecutable"] = replaceExecutable ?: @{};
         if (![replaceExecutable[@"ok"] isEqual:@"YES"]) {
             result[@"ok"] = @"NO";
@@ -431,15 +431,10 @@ static NSDictionary<NSString *, id> *PXIPTrySignPath(NSString *path, NSString *e
 
         PXIPAddLoadCommandStatus(result, @"patchedCopy", patchedCopy, dylibLoadPath);
         PXIPAddLoadCommandStatus(result, @"installedExecutableAfterReplace", executablePath, dylibLoadPath);
-
         if (![result[@"installedExecutableAfterReplaceHasLoadCommand"] isEqual:@"YES"]) {
-            NSDictionary *patchPrefix = PXIPRunRootDetailed(@[@"patchprefix", patchedCopy, executablePath, @"65536"]);
-            result[@"patchExecutablePrefix"] = patchPrefix ?: @{};
-            if (![patchPrefix[@"ok"] isEqual:@"YES"]) {
-                result[@"ok"] = @"NO";
-                result[@"error"] = patchPrefix[@"error"] ?: @"replacefile did not install the patched header, and patchprefix fallback failed";
-                return result;
-            }
+            result[@"ok"] = @"NO";
+            result[@"error"] = @"installfile completed, but live executable still does not contain ProjectXInject load command";
+            return result;
         }
 
         PXIPAddLoadCommandStatus(result, @"installedExecutable", executablePath, dylibLoadPath);
@@ -507,7 +502,7 @@ static NSDictionary<NSString *, id> *PXIPTrySignPath(NSString *path, NSString *e
         return result;
     }
     NSString *rootErr = nil;
-    NSDictionary *replaceExecutable = PXIPRunRootDetailed(@[@"replacefile", backupExecutable, executablePath]);
+    NSDictionary *replaceExecutable = PXIPRunRootDetailed(@[@"installfile", backupExecutable, executablePath]);
     result[@"replaceExecutable"] = replaceExecutable ?: @{};
     if (![replaceExecutable[@"ok"] isEqual:@"YES"]) {
         result[@"ok"] = @"NO";

@@ -15,6 +15,7 @@
 //   weaponx_root_helper mkdir   <absolute-path>
 //   weaponx_root_helper cpfile  <src-absolute-path> <dst-absolute-path>
 //   weaponx_root_helper replacefile <src-absolute-path> <dst-absolute-path>
+//   weaponx_root_helper installfile <src-absolute-path> <dst-absolute-path>
 //   weaponx_root_helper patchprefix <src-absolute-path> <dst-absolute-path> <byte-count>
 //   weaponx_root_helper ldidprobe
 //   weaponx_root_helper ldidsign <binary-absolute-path> [entitlements-plist]
@@ -495,6 +496,54 @@ static int op_replacefile(NSString *src, NSString *dst) {
     return 0;
 }
 
+static int op_installfile(NSString *src, NSString *dst) {
+    if (!pathIsAllowed(src)) { perr(@"installfile: src not allowed: %@", src); return 2; }
+    if (!pathIsAllowed(dst)) { perr(@"installfile: dst not allowed: %@", dst); return 2; }
+    struct stat srcSt;
+    if (stat(src.fileSystemRepresentation, &srcSt) != 0) {
+        perr(@"installfile stat src '%@' failed: %s", src, strerror(errno));
+        return 3;
+    }
+    mode_t mode = srcSt.st_mode & 07777;
+    if (!mode) mode = 0755;
+    NSString *parent = [dst stringByDeletingLastPathComponent];
+    NSString *tmp = [parent stringByAppendingPathComponent:[NSString stringWithFormat:@".%@.projectx.install.%d.tmp", dst.lastPathComponent, getpid()]];
+    unlink(tmp.fileSystemRepresentation);
+    int rc = copy_regular_file(src, tmp, mode);
+    if (rc != 0) return rc;
+
+    lchflags(dst.fileSystemRepresentation, 0);
+    chmod(dst.fileSystemRepresentation, 0777);
+    if (unlink(dst.fileSystemRepresentation) != 0 && errno != ENOENT) {
+        int saved = errno;
+        unlink(tmp.fileSystemRepresentation);
+        perr(@"installfile unlink dst '%@' failed: %s", dst, strerror(saved));
+        return 3;
+    }
+
+    if (rename(tmp.fileSystemRepresentation, dst.fileSystemRepresentation) != 0) {
+        int saved = errno;
+        unlink(tmp.fileSystemRepresentation);
+        perr(@"installfile rename '%@' -> '%@' failed: %s", tmp, dst, strerror(saved));
+        return 3;
+    }
+    chmod(dst.fileSystemRepresentation, mode);
+    lchown(dst.fileSystemRepresentation, 0, 0);
+    int dirFd = open(parent.fileSystemRepresentation, O_RDONLY);
+    if (dirFd >= 0) {
+        fsync(dirFd);
+        close(dirFd);
+    }
+    NSString *reason = nil;
+    if (!files_equal(src, dst, &reason)) {
+        perr(@"installfile verification failed: %@", reason ?: @"unknown mismatch");
+        return 3;
+    }
+    printf("installed=%s\nverified=YES\n", dst.UTF8String);
+    fflush(stdout);
+    return 0;
+}
+
 static int op_patchprefix(NSString *src, NSString *dst, NSString *byteCountString) {
     if (!pathIsAllowed(src)) { perr(@"patchprefix: src not allowed: %@", src); return 2; }
     if (!pathIsAllowed(dst)) { perr(@"patchprefix: dst not allowed: %@", dst); return 2; }
@@ -794,6 +843,10 @@ int main(int argc, char *argv[]) {
         if ([op isEqualToString:@"replacefile"]) {
             if (argc != 4) { perr(@"replacefile: expects <src> <dst>"); return 2; }
             return op_replacefile(@(argv[2]), @(argv[3]));
+        }
+        if ([op isEqualToString:@"installfile"]) {
+            if (argc != 4) { perr(@"installfile: expects <src> <dst>"); return 2; }
+            return op_installfile(@(argv[2]), @(argv[3]));
         }
         if ([op isEqualToString:@"patchprefix"]) {
             if (argc != 5) { perr(@"patchprefix: expects <src> <dst> <byte-count>"); return 2; }
