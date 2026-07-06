@@ -421,9 +421,19 @@ static NSDictionary<NSString *, id> *PXIPTrySignPath(NSString *path, NSString *e
 
         NSString *rootErr = nil;
         [PXDiagnostics log:@"[patch] installing patched copy source=%@ executable=%@", patchedCopy ?: @"", executablePath ?: @""];
-        if (!PXIPRunRoot(@[@"replacefile", patchedCopy, executablePath], &rootErr)) {
+        NSDictionary *replaceExecutable = PXIPRunRootDetailed(@[@"replacefile", patchedCopy, executablePath]);
+        result[@"replaceExecutable"] = replaceExecutable ?: @{};
+        if (![replaceExecutable[@"ok"] isEqual:@"YES"]) {
             result[@"ok"] = @"NO";
-            result[@"error"] = rootErr ?: @"Failed to install patched executable";
+            result[@"error"] = replaceExecutable[@"error"] ?: @"Failed to install patched executable";
+            return result;
+        }
+
+        NSDictionary *patchPrefix = PXIPRunRootDetailed(@[@"patchprefix", patchedCopy, executablePath, @"65536"]);
+        result[@"patchExecutablePrefix"] = patchPrefix ?: @{};
+        if (![patchPrefix[@"ok"] isEqual:@"YES"]) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = patchPrefix[@"error"] ?: @"Failed to patch executable prefix";
             return result;
         }
 
@@ -493,9 +503,18 @@ static NSDictionary<NSString *, id> *PXIPTrySignPath(NSString *path, NSString *e
         return result;
     }
     NSString *rootErr = nil;
-    if (!PXIPRunRoot(@[@"replacefile", backupExecutable, executablePath], &rootErr)) {
+    NSDictionary *replaceExecutable = PXIPRunRootDetailed(@[@"replacefile", backupExecutable, executablePath]);
+    result[@"replaceExecutable"] = replaceExecutable ?: @{};
+    if (![replaceExecutable[@"ok"] isEqual:@"YES"]) {
         result[@"ok"] = @"NO";
-        result[@"error"] = rootErr ?: @"Failed to restore executable";
+        result[@"error"] = replaceExecutable[@"error"] ?: @"Failed to restore executable";
+        return result;
+    }
+    NSDictionary *patchPrefix = PXIPRunRootDetailed(@[@"patchprefix", backupExecutable, executablePath, @"65536"]);
+    result[@"patchExecutablePrefix"] = patchPrefix ?: @{};
+    if (![patchPrefix[@"ok"] isEqual:@"YES"]) {
+        result[@"ok"] = @"NO";
+        result[@"error"] = patchPrefix[@"error"] ?: @"Failed to restore executable prefix";
         return result;
     }
     if (targetDylib.length) {

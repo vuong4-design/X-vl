@@ -15,6 +15,7 @@
 //   weaponx_root_helper mkdir   <absolute-path>
 //   weaponx_root_helper cpfile  <src-absolute-path> <dst-absolute-path>
 //   weaponx_root_helper replacefile <src-absolute-path> <dst-absolute-path>
+//   weaponx_root_helper patchprefix <src-absolute-path> <dst-absolute-path> <byte-count>
 //   weaponx_root_helper ldidprobe
 //   weaponx_root_helper ldidsign <binary-absolute-path> [entitlements-plist]
 //   weaponx_root_helper dyldlaunch <executable> <dylib> <home> <bundleID> [logPath]
@@ -490,6 +491,105 @@ static int op_replacefile(NSString *src, NSString *dst) {
         return 3;
     }
     printf("replaced=%s\nverified=YES\n", dst.UTF8String);
+    fflush(stdout);
+    return 0;
+}
+
+static int op_patchprefix(NSString *src, NSString *dst, NSString *byteCountString) {
+    if (!pathIsAllowed(src)) { perr(@"patchprefix: src not allowed: %@", src); return 2; }
+    if (!pathIsAllowed(dst)) { perr(@"patchprefix: dst not allowed: %@", dst); return 2; }
+    unsigned long long byteCountULL = strtoull(byteCountString.UTF8String, NULL, 10);
+    if (byteCountULL == 0 || byteCountULL > (1024ULL * 1024ULL)) {
+        perr(@"patchprefix: invalid byte count: %@", byteCountString);
+        return 2;
+    }
+    size_t byteCount = (size_t)byteCountULL;
+    char *srcBuf = malloc(byteCount);
+    char *dstBuf = malloc(byteCount);
+    if (!srcBuf || !dstBuf) {
+        free(srcBuf);
+        free(dstBuf);
+        perr(@"patchprefix: malloc failed for %llu bytes", byteCountULL);
+        return 3;
+    }
+
+    int srcFd = open(src.fileSystemRepresentation, O_RDONLY);
+    if (srcFd < 0) {
+        int saved = errno;
+        free(srcBuf);
+        free(dstBuf);
+        perr(@"patchprefix: open src '%@' failed: %s", src, strerror(saved));
+        return 3;
+    }
+    ssize_t totalRead = 0;
+    while ((size_t)totalRead < byteCount) {
+        ssize_t n = read(srcFd, srcBuf + totalRead, byteCount - (size_t)totalRead);
+        if (n < 0) {
+            int saved = errno;
+            close(srcFd);
+            free(srcBuf);
+            free(dstBuf);
+            perr(@"patchprefix: read src '%@' failed: %s", src, strerror(saved));
+            return 3;
+        }
+        if (n == 0) break;
+        totalRead += n;
+    }
+    close(srcFd);
+    if (totalRead <= 0) {
+        free(srcBuf);
+        free(dstBuf);
+        perr(@"patchprefix: source is empty: %@", src);
+        return 3;
+    }
+
+    int dstFd = open(dst.fileSystemRepresentation, O_RDWR);
+    if (dstFd < 0) {
+        int saved = errno;
+        free(srcBuf);
+        free(dstBuf);
+        perr(@"patchprefix: open dst '%@' failed: %s", dst, strerror(saved));
+        return 3;
+    }
+    ssize_t totalWritten = 0;
+    while (totalWritten < totalRead) {
+        ssize_t w = pwrite(dstFd, srcBuf + totalWritten, (size_t)(totalRead - totalWritten), totalWritten);
+        if (w < 0) {
+            int saved = errno;
+            close(dstFd);
+            free(srcBuf);
+            free(dstBuf);
+            perr(@"patchprefix: write dst '%@' failed: %s", dst, strerror(saved));
+            return 3;
+        }
+        totalWritten += w;
+    }
+    fsync(dstFd);
+    ssize_t totalVerify = 0;
+    while (totalVerify < totalRead) {
+        ssize_t n = pread(dstFd, dstBuf + totalVerify, (size_t)(totalRead - totalVerify), totalVerify);
+        if (n < 0) {
+            int saved = errno;
+            close(dstFd);
+            free(srcBuf);
+            free(dstBuf);
+            perr(@"patchprefix: verify read dst '%@' failed: %s", dst, strerror(saved));
+            return 3;
+        }
+        if (n == 0) break;
+        totalVerify += n;
+    }
+    close(dstFd);
+    if (totalVerify != totalRead || memcmp(srcBuf, dstBuf, (size_t)totalRead) != 0) {
+        free(srcBuf);
+        free(dstBuf);
+        perr(@"patchprefix: verification failed bytes=%zd verify=%zd", totalRead, totalVerify);
+        return 3;
+    }
+    free(srcBuf);
+    free(dstBuf);
+    printf("patchprefix=%s\nbytes=%zd\nverified=YES\n", dst.UTF8String, totalRead);
+    fflush(stdout);
     return 0;
 }
 
@@ -694,6 +794,10 @@ int main(int argc, char *argv[]) {
         if ([op isEqualToString:@"replacefile"]) {
             if (argc != 4) { perr(@"replacefile: expects <src> <dst>"); return 2; }
             return op_replacefile(@(argv[2]), @(argv[3]));
+        }
+        if ([op isEqualToString:@"patchprefix"]) {
+            if (argc != 5) { perr(@"patchprefix: expects <src> <dst> <byte-count>"); return 2; }
+            return op_patchprefix(@(argv[2]), @(argv[3]), @(argv[4]));
         }
         if ([op isEqualToString:@"ldidprobe"]) {
             if (argc != 2) { perr(@"ldidprobe: expects no args"); return 2; }
