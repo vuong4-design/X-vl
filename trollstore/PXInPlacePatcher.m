@@ -9,6 +9,8 @@
 #import "common/PXProcessKiller.h"
 
 #import <objc/message.h>
+#import <mach-o/fat.h>
+#import <mach-o/loader.h>
 #import <zlib.h>
 
 NSString * const PXInPlacePatcherErrorDomain = @"PXInPlacePatcherErrorDomain";
@@ -229,6 +231,44 @@ static NSDictionary<NSString *, id> *PXIPTrySignPath(NSString *path, NSString *e
         @"probe": probe ?: @{},
         @"sign": sign ?: @{},
     };
+}
+
+static NSString *PXIPResolveLoadCommandPath(NSString *loadName, NSString *executablePath, NSString *frameworksPath) {
+    if (!loadName.length) return nil;
+    NSString *resolved = loadName;
+    if ([resolved hasPrefix:@"@executable_path/"]) {
+        NSString *exeDir = [executablePath stringByDeletingLastPathComponent];
+        resolved = [exeDir stringByAppendingPathComponent:[resolved substringFromIndex:@"@executable_path/".length]];
+    } else if ([resolved hasPrefix:@"@rpath/"]) {
+        resolved = [frameworksPath stringByAppendingPathComponent:[resolved substringFromIndex:@"@rpath/".length]];
+    } else if (![resolved isAbsolutePath]) {
+        return nil;
+    }
+    return [[resolved stringByStandardizingPath] copy];
+}
+
+static BOOL PXIPIsIgnoredCarrierName(NSString *name) {
+    NSString *lower = name.lowercaseString ?: @"";
+    if ([lower hasPrefix:@"libswift"]) return YES;
+    NSArray<NSString *> *ignored = @[
+        @"projectxinject.dylib",
+        @"cydiasubstrate",
+        @"cydiasubstrate.framework",
+        @"ellekit",
+        @"ellekit.framework",
+        @"libsubstrate.dylib",
+        @"libsubstitute.dylib",
+        @"libellekit.dylib",
+    ];
+    return [ignored containsObject:lower];
+}
+
+static BOOL PXIPLooksLikeMachO(NSString *path) {
+    NSData *data = [NSData dataWithContentsOfFile:path options:0 error:nil];
+    if (data.length < sizeof(uint32_t)) return NO;
+    uint32_t magic = 0;
+    [data getBytes:&magic length:sizeof(magic)];
+    return magic == MH_MAGIC || magic == MH_CIGAM || magic == MH_MAGIC_64 || magic == MH_CIGAM_64 || magic == FAT_MAGIC || magic == FAT_CIGAM;
 }
 
 static void PXIPWriteLE16(NSMutableData *data, uint16_t value) {
@@ -464,6 +504,289 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
     }
 }
 
++ (NSDictionary<NSString *,id> *)scanFrameworkCarriersBundleID:(NSString *)bundleID {
+    NSMutableDictionary *result = [NSMutableDictionary dictionary];
+    result[@"bundleID"] = bundleID ?: @"";
+    [PXDiagnostics log:@"[carrier] scan requested bundleID=%@", bundleID ?: @""];
+    @try {
+        NSDictionary *resolved = PXIPResolve(bundleID);
+        [result addEntriesFromDictionary:resolved];
+        NSString *bundlePath = resolved[@"bundlePath"];
+        NSString *executablePath = resolved[@"executablePath"];
+        NSString *frameworksPath = resolved[@"frameworksPath"];
+        NSFileManager *fm = [NSFileManager defaultManager];
+        if (!bundlePath.length || !executablePath.length || ![fm fileExistsAtPath:executablePath]) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = @"Failed to resolve target executable";
+            return result;
+        }
+
+        NSError *mainEncErr = nil;
+        NSDictionary *mainEncryption = [PXMachOInjector encryptionSummaryForMachOAtPath:executablePath error:&mainEncErr];
+        NSError *mainLoadErr = nil;
+        NSDictionary *mainLoad = [PXMachOInjector loadCommandSummaryForMachOAtPath:executablePath error:&mainLoadErr];
+        result[@"mainExecutableEncrypted"] = [mainEncryption[@"encrypted"] isEqual:@"YES"] ? @"YES" : @"NO";
+        result[@"mainEncryption"] = mainEncryption ?: @{};
+        result[@"mainEncryptionError"] = mainEncErr.localizedDescription ?: @"";
+        result[@"mainLoadCommandError"] = mainLoadErr.localizedDescription ?: @"";
+        result[@"mainLoadedDylibs"] = mainLoad[@"loadedDylibs"] ?: @[];
+        result[@"mainRpaths"] = mainLoad[@"rpaths"] ?: @[];
+
+        NSMutableSet<NSString *> *linkedPaths = [NSMutableSet set];
+        for (NSString *loadName in mainLoad[@"loadedDylibs"] ?: @[]) {
+            NSString *resolvedPath = PXIPResolveLoadCommandPath(loadName, executablePath, frameworksPath);
+            if (resolvedPath.length && [resolvedPath hasPrefix:frameworksPath]) {
+                [linkedPaths addObject:resolvedPath];
+            }
+        }
+
+        NSMutableArray<NSDictionary *> *candidates = [NSMutableArray array];
+        BOOL frameworksIsDir = NO;
+        if (![fm fileExistsAtPath:frameworksPath isDirectory:&frameworksIsDir] || !frameworksIsDir) {
+            result[@"ok"] = @"YES";
+            result[@"error"] = @"";
+            result[@"frameworksExists"] = @"NO";
+            result[@"candidateCount"] = @0;
+            result[@"eligibleCount"] = @0;
+            result[@"selectedCarrier"] = @{};
+            [PXDiagnostics log:@"[carrier] scan result=%@", result];
+            return result;
+        }
+
+        NSDirectoryEnumerator *en = [fm enumeratorAtPath:frameworksPath];
+        NSString *rel = nil;
+        while ((rel = [en nextObject])) {
+            if ([rel containsString:@".troll-fools.bak"] || [rel containsString:@".projectx.bak"]) continue;
+            NSString *path = [frameworksPath stringByAppendingPathComponent:rel];
+            NSDictionary *attrs = [fm attributesOfItemAtPath:path error:nil];
+            NSString *type = attrs[NSFileType];
+            if (![type isEqualToString:NSFileTypeRegular]) continue;
+            NSString *last = path.lastPathComponent ?: @"";
+            NSString *parentExt = path.stringByDeletingLastPathComponent.pathExtension.lowercaseString ?: @"";
+            BOOL extensionLooksEligible = [path.pathExtension.lowercaseString isEqualToString:@"dylib"] || [parentExt isEqualToString:@"framework"] || path.pathExtension.length == 0;
+            if (!extensionLooksEligible || !PXIPLooksLikeMachO(path)) continue;
+
+            NSError *encErr = nil;
+            NSDictionary *enc = [PXMachOInjector encryptionSummaryForMachOAtPath:path error:&encErr];
+            NSError *loadErr = nil;
+            NSDictionary *load = [PXMachOInjector loadCommandSummaryForMachOAtPath:path error:&loadErr];
+            BOOL encrypted = [enc[@"encrypted"] isEqual:@"YES"];
+            BOOL ignored = PXIPIsIgnoredCarrierName(last) || PXIPIsIgnoredCarrierName(path.stringByDeletingLastPathComponent.lastPathComponent);
+            BOOL linked = [linkedPaths containsObject:[path stringByStandardizingPath]];
+            NSString *skipReason = @"";
+            if (encrypted) skipReason = @"encrypted";
+            else if (ignored) skipReason = @"ignored-name";
+            else if (encErr || loadErr) skipReason = @"unreadable";
+            NSMutableDictionary *row = [@{
+                @"path": path ?: @"",
+                @"relativePath": rel ?: @"",
+                @"name": last ?: @"",
+                @"fileSize": attrs[NSFileSize] ?: @0,
+                @"encrypted": encrypted ? @"YES" : @"NO",
+                @"ignored": ignored ? @"YES" : @"NO",
+                @"linkedFromMain": linked ? @"YES" : @"NO",
+                @"eligible": (!encrypted && !ignored && !encErr && !loadErr) ? @"YES" : @"NO",
+                @"skipReason": skipReason ?: @"",
+                @"encryption": enc ?: @{},
+                @"encryptionError": encErr.localizedDescription ?: @"",
+                @"loadedDylibs": load[@"loadedDylibs"] ?: @[],
+                @"rpaths": load[@"rpaths"] ?: @[],
+                @"loadCommandError": loadErr.localizedDescription ?: @"",
+            } mutableCopy];
+            [candidates addObject:row];
+        }
+
+        NSMutableArray<NSDictionary *> *eligible = [NSMutableArray array];
+        NSMutableArray<NSDictionary *> *linkedEligible = [NSMutableArray array];
+        for (NSDictionary *row in candidates) {
+            if (![row[@"eligible"] isEqual:@"YES"]) continue;
+            [eligible addObject:row];
+            if ([row[@"linkedFromMain"] isEqual:@"YES"]) [linkedEligible addObject:row];
+        }
+        NSDictionary *selected = linkedEligible.firstObject ?: eligible.firstObject ?: @{};
+
+        result[@"ok"] = @"YES";
+        result[@"error"] = @"";
+        result[@"frameworksExists"] = @"YES";
+        result[@"linkedFrameworkPaths"] = linkedPaths.allObjects ?: @[];
+        result[@"candidateCount"] = @(candidates.count);
+        result[@"eligibleCount"] = @(eligible.count);
+        result[@"linkedEligibleCount"] = @(linkedEligible.count);
+        result[@"selectedCarrier"] = selected ?: @{};
+        result[@"selectedCarrierPath"] = selected[@"path"] ?: @"";
+        result[@"selectionReason"] = linkedEligible.count ? @"linked-from-main" : (eligible.count ? @"fallback-first-unencrypted-framework-mach-o" : @"no-eligible-carrier");
+        result[@"candidates"] = candidates ?: @[];
+        [PXDiagnostics log:@"[carrier] scan result=%@", result];
+        return result;
+    } @catch (NSException *ex) {
+        result[@"ok"] = @"NO";
+        result[@"error"] = [NSString stringWithFormat:@"Exception during carrier scan: %@ %@", ex.name ?: @"", ex.reason ?: @""];
+        [PXDiagnostics log:@"[carrier] scan exception=%@", result[@"error"]];
+        return result;
+    }
+}
+
++ (NSDictionary<NSString *,id> *)patchFrameworkCarrierBundleID:(NSString *)bundleID {
+    NSMutableDictionary *result = [NSMutableDictionary dictionary];
+    result[@"bundleID"] = bundleID ?: @"";
+    [PXDiagnostics log:@"[carrier] patch requested bundleID=%@", bundleID ?: @""];
+    @try {
+        NSDictionary *scan = [self scanFrameworkCarriersBundleID:bundleID];
+        result[@"scan"] = scan ?: @{};
+        if (![scan[@"ok"] isEqual:@"YES"]) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = scan[@"error"] ?: @"Carrier scan failed";
+            return result;
+        }
+        NSDictionary *selected = scan[@"selectedCarrier"];
+        if (![selected isKindOfClass:[NSDictionary class]] || ![selected[@"path"] isKindOfClass:[NSString class]] || ![selected[@"path"] length]) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = @"No eligible unencrypted framework/dylib carrier found";
+            return result;
+        }
+
+        NSString *carrierPath = selected[@"path"];
+        NSString *bundlePath = scan[@"bundlePath"] ?: @"";
+        NSString *frameworksPath = scan[@"frameworksPath"] ?: @"";
+        NSString *executableName = scan[@"executableName"] ?: @"";
+        NSString *version = scan[@"version"] ?: @"";
+        NSString *build = scan[@"build"] ?: @"";
+        NSString *dylibLoadPath = @"@executable_path/Frameworks/ProjectXInject.dylib";
+        NSString *targetDylib = [frameworksPath stringByAppendingPathComponent:@"ProjectXInject.dylib"];
+        NSString *sourceDylib = [PXRuntimeSnapshot bundledInjectDylibPath];
+        NSFileManager *fm = [NSFileManager defaultManager];
+        if (!carrierPath.length || ![fm fileExistsAtPath:carrierPath]) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = @"Selected carrier no longer exists";
+            return result;
+        }
+        if (!sourceDylib.length || ![fm fileExistsAtPath:sourceDylib]) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = @"Bundled ProjectXInject.dylib missing";
+            return result;
+        }
+
+        NSError *snapshotErr = nil;
+        NSDictionary *snapshot = [PXRuntimeSnapshot exportSnapshotForBundleID:bundleID error:&snapshotErr];
+        result[@"snapshot"] = snapshot ?: @{};
+        result[@"snapshotError"] = snapshotErr.localizedDescription ?: @"";
+
+        NSString *backupDir = [[[PXIPBackupRoot() stringByAppendingPathComponent:PXIPSafeName(bundleID)] stringByAppendingPathComponent:[NSString stringWithFormat:@"%@-%@", version.length ? version : @"unknown", build.length ? build : @"unknown"]] stringByAppendingPathComponent:@"FrameworkCarriers"];
+        NSString *safeCarrierName = PXIPSafeName(selected[@"relativePath"] ?: carrierPath.lastPathComponent ?: @"carrier");
+        NSString *backupCarrier = [backupDir stringByAppendingPathComponent:safeCarrierName];
+        NSString *patchedCarrier = [backupDir stringByAppendingPathComponent:[safeCarrierName stringByAppendingString:@".patched"]];
+        result[@"backupDir"] = backupDir ?: @"";
+        result[@"backupCarrier"] = backupCarrier ?: @"";
+        result[@"patchedCarrier"] = patchedCarrier ?: @"";
+        result[@"carrierPath"] = carrierPath ?: @"";
+        result[@"targetDylib"] = targetDylib ?: @"";
+        result[@"dylibLoadPath"] = dylibLoadPath ?: @"";
+
+        NSString *rootErr = nil;
+        if (!PXIPRunRoot(@[@"mkdir", backupDir], &rootErr)) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = rootErr ?: @"Failed to create carrier backup dir";
+            return result;
+        }
+        result[@"chownBackupDir"] = PXIPRunRootDetailed(@[@"chown", @"501", @"501", backupDir]);
+        if (!PXIPRunRoot(@[@"cpfile", carrierPath, backupCarrier], &rootErr)) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = rootErr ?: @"Failed to back up selected carrier";
+            return result;
+        }
+        result[@"chmodBackupCarrier"] = PXIPRunRootDetailed(@[@"chmod", @"0755", backupCarrier]);
+        result[@"chownBackupCarrier"] = PXIPRunRootDetailed(@[@"chown", @"501", @"501", backupCarrier]);
+
+        [fm removeItemAtPath:patchedCarrier error:nil];
+        if (![fm copyItemAtPath:backupCarrier toPath:patchedCarrier error:nil]) {
+            NSDictionary *copyPatched = PXIPRunRootDetailed(@[@"cpfile", backupCarrier, patchedCarrier]);
+            result[@"copyPatchedCarrier"] = copyPatched ?: @{};
+            if (![copyPatched[@"ok"] isEqual:@"YES"]) {
+                result[@"ok"] = @"NO";
+                result[@"error"] = copyPatched[@"error"] ?: @"Failed to create patched carrier copy";
+                return result;
+            }
+        }
+        result[@"chmodPatchedCarrier"] = PXIPRunRootDetailed(@[@"chmod", @"0755", patchedCarrier]);
+        result[@"chownPatchedCarrier"] = PXIPRunRootDetailed(@[@"chown", @"501", @"501", patchedCarrier]);
+
+        NSError *patchErr = nil;
+        BOOL patched = [PXMachOInjector insertDylibLoadCommand:dylibLoadPath intoMachOAtPath:patchedCarrier error:&patchErr];
+        result[@"patchCarrierOK"] = patched ? @"YES" : @"NO";
+        result[@"patchCarrierError"] = patchErr.localizedDescription ?: @"";
+        PXIPAddLoadCommandStatus(result, @"patchedCarrier", patchedCarrier, dylibLoadPath);
+        if (!patched) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = patchErr.localizedDescription ?: @"Failed to patch selected carrier";
+            return result;
+        }
+
+        NSDictionary *signCarrier = PXIPTrySignPath(patchedCarrier, nil);
+        result[@"signPatchedCarrier"] = signCarrier ?: @{};
+        NSDictionary *signDylibSource = PXIPTrySignPath(sourceDylib, [[NSBundle mainBundle] pathForResource:@"ProjectXInject" ofType:@"entitlements.plist"]);
+        result[@"signBundledDylib"] = signDylibSource ?: @{};
+
+        if (executableName.length) {
+            PXKillallTermThenKill(executableName, 0.5);
+            PXWaitForProcessesToExit(@[executableName], 2.0);
+        }
+
+        NSDictionary *copyDylib = PXIPRunRootDetailed(@[@"cpfile", sourceDylib, targetDylib]);
+        result[@"copyDylib"] = copyDylib ?: @{};
+        if (![copyDylib[@"ok"] isEqual:@"YES"]) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = copyDylib[@"error"] ?: @"Failed to copy ProjectXInject.dylib into target Frameworks";
+            return result;
+        }
+        NSDictionary *signTargetDylib = PXIPTrySignPath(targetDylib, [[NSBundle mainBundle] pathForResource:@"ProjectXInject" ofType:@"entitlements.plist"]);
+        result[@"signTargetDylib"] = signTargetDylib ?: @{};
+        NSDictionary *installCarrier = PXIPRunRootDetailed(@[@"installfile", patchedCarrier, carrierPath]);
+        result[@"installCarrier"] = installCarrier ?: @{};
+        if (![installCarrier[@"ok"] isEqual:@"YES"]) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = installCarrier[@"error"] ?: @"Failed to install patched carrier";
+            return result;
+        }
+        NSDictionary *chownCarrier = PXIPRunRootDetailed(@[@"chown", @"33", @"33", carrierPath]);
+        NSDictionary *chownDylib = PXIPRunRootDetailed(@[@"chown", @"33", @"33", targetDylib]);
+        result[@"chownCarrier"] = chownCarrier ?: @{};
+        result[@"chownDylib"] = chownDylib ?: @{};
+
+        NSMutableDictionary *state = [NSMutableDictionary dictionaryWithDictionary:PXIPReadState(bundleID) ?: @{}];
+        [state addEntriesFromDictionary:@{
+            @"mode": @"framework-carrier-installed-unverified",
+            @"bundleID": bundleID ?: @"",
+            @"bundlePath": bundlePath ?: @"",
+            @"executableName": executableName ?: @"",
+            @"executablePath": scan[@"executablePath"] ?: @"",
+            @"frameworksPath": frameworksPath ?: @"",
+            @"version": version ?: @"",
+            @"build": build ?: @"",
+            @"carrierPath": carrierPath ?: @"",
+            @"backupCarrier": backupCarrier ?: @"",
+            @"patchedCarrier": patchedCarrier ?: @"",
+            @"targetDylib": targetDylib ?: @"",
+            @"dylibLoadPath": dylibLoadPath ?: @"",
+            @"selectedCarrier": selected ?: @{},
+            @"installedAt": @([[NSDate date] timeIntervalSince1970]),
+        }];
+        PXIPWriteState(bundleID, state);
+        result[@"state"] = state ?: @{};
+        PXIPAddLoadCommandStatus(result, @"installedCarrier", carrierPath, dylibLoadPath);
+        PXIPAddCodeSignatureOnlyStatus(result, @"targetDylib", targetDylib);
+        result[@"ok"] = @"YES";
+        result[@"error"] = @"";
+        result[@"note"] = @"Framework carrier patched. Launch target app and check marker/log; CoreTrust signing may still be required depending on device state.";
+        [PXDiagnostics log:@"[carrier] patch result=%@", result];
+        return result;
+    } @catch (NSException *ex) {
+        result[@"ok"] = @"NO";
+        result[@"error"] = [NSString stringWithFormat:@"Exception during carrier patch: %@ %@", ex.name ?: @"", ex.reason ?: @""];
+        [PXDiagnostics log:@"[carrier] patch exception=%@", result[@"error"]];
+        return result;
+    }
+}
+
 + (NSDictionary<NSString *,id> *)patchPreparedCopyBundleID:(NSString *)bundleID {
     NSMutableDictionary *result = [NSMutableDictionary dictionary];
     result[@"bundleID"] = bundleID ?: @"";
@@ -529,11 +852,22 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         [result addEntriesFromDictionary:resolved];
         NSString *bundlePath = resolved[@"bundlePath"];
         NSString *executableName = resolved[@"executableName"];
+        NSString *sourceExecutable = (bundlePath.length && executableName.length) ? [bundlePath stringByAppendingPathComponent:executableName] : @"";
         NSString *dylibLoadPath = @"@executable_path/Frameworks/ProjectXInject.dylib";
         NSFileManager *fm = [NSFileManager defaultManager];
-        if (!bundlePath.length || !executableName.length || ![fm fileExistsAtPath:[bundlePath stringByAppendingPathComponent:executableName]]) {
+        if (!bundlePath.length || !executableName.length || ![fm fileExistsAtPath:sourceExecutable]) {
             result[@"ok"] = @"NO";
             result[@"error"] = @"Failed to resolve target app bundle/executable";
+            return result;
+        }
+
+        NSError *encryptionErr = nil;
+        NSDictionary *encryption = [PXMachOInjector encryptionSummaryForMachOAtPath:sourceExecutable error:&encryptionErr];
+        result[@"sourceEncryption"] = encryption ?: @{};
+        result[@"sourceEncryptionError"] = encryptionErr.localizedDescription ?: @"";
+        if ([encryption[@"encrypted"] isEqual:@"YES"]) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = @"Target main executable is encrypted (cryptid != 0). TrollStore cannot install a patched encrypted App Store binary. Use a decrypted IPA/app bundle as input.";
             return result;
         }
 
@@ -733,21 +1067,34 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
     [result setObject:state ?: @{} forKey:@"state"];
     NSString *executablePath = state[@"executablePath"];
     NSString *backupExecutable = state[@"backupExecutable"];
+    NSString *carrierPath = state[@"carrierPath"];
+    NSString *backupCarrier = state[@"backupCarrier"];
     NSString *targetDylib = state[@"targetDylib"];
     NSFileManager *fm = [NSFileManager defaultManager];
-    if (!executablePath.length || !backupExecutable.length || ![fm fileExistsAtPath:backupExecutable]) {
+    BOOL carrierMode = carrierPath.length && backupCarrier.length;
+    if (carrierMode && [fm fileExistsAtPath:backupCarrier]) {
+        NSDictionary *replaceCarrier = PXIPRunRootDetailed(@[@"installfile", backupCarrier, carrierPath]);
+        result[@"replaceCarrier"] = replaceCarrier ?: @{};
+        if (![replaceCarrier[@"ok"] isEqual:@"YES"]) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = replaceCarrier[@"error"] ?: @"Failed to restore carrier";
+            return result;
+        }
+        result[@"chownRestoredCarrier"] = PXIPRunRootDetailed(@[@"chown", @"33", @"33", carrierPath]);
+    } else if (!executablePath.length || !backupExecutable.length || ![fm fileExistsAtPath:backupExecutable]) {
         result[@"ok"] = @"NO";
-        result[@"error"] = @"No backup executable found for this bundle";
+        result[@"error"] = @"No backup executable or carrier found for this bundle";
         return result;
+    } else {
+        NSDictionary *replaceExecutable = PXIPRunRootDetailed(@[@"installfile", backupExecutable, executablePath]);
+        result[@"replaceExecutable"] = replaceExecutable ?: @{};
+        if (![replaceExecutable[@"ok"] isEqual:@"YES"]) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = replaceExecutable[@"error"] ?: @"Failed to restore executable";
+            return result;
+        }
     }
     NSString *rootErr = nil;
-    NSDictionary *replaceExecutable = PXIPRunRootDetailed(@[@"installfile", backupExecutable, executablePath]);
-    result[@"replaceExecutable"] = replaceExecutable ?: @{};
-    if (![replaceExecutable[@"ok"] isEqual:@"YES"]) {
-        result[@"ok"] = @"NO";
-        result[@"error"] = replaceExecutable[@"error"] ?: @"Failed to restore executable";
-        return result;
-    }
     if (targetDylib.length) {
         rootErr = nil;
         if (!PXIPRunRoot(@[@"rm", targetDylib], &rootErr)) {
@@ -788,6 +1135,15 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
     NSString *executablePath = result[@"executablePath"];
     if (![executablePath isKindOfClass:[NSString class]] || !executablePath.length) executablePath = state[@"executablePath"];
     PXIPAddLoadCommandStatus(result, @"installedExecutable", executablePath, dylibLoadPath);
+    NSString *carrierPath = state[@"carrierPath"];
+    NSString *backupCarrier = state[@"backupCarrier"];
+    NSString *patchedCarrier = state[@"patchedCarrier"];
+    result[@"carrierPath"] = carrierPath ?: @"";
+    result[@"backupCarrierExists"] = (backupCarrier.length && [fm fileExistsAtPath:backupCarrier]) ? @"YES" : @"NO";
+    result[@"patchedCarrierExists"] = (patchedCarrier.length && [fm fileExistsAtPath:patchedCarrier]) ? @"YES" : @"NO";
+    PXIPAddLoadCommandStatus(result, @"backupCarrier", backupCarrier, dylibLoadPath);
+    PXIPAddLoadCommandStatus(result, @"patchedCarrier", patchedCarrier, dylibLoadPath);
+    PXIPAddLoadCommandStatus(result, @"installedCarrier", carrierPath, dylibLoadPath);
     return result;
 }
 

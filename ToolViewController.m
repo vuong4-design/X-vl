@@ -583,6 +583,31 @@
             });
         });
     }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Scan Framework Carriers" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSDictionary *result = [PXDiagnostics scanFrameworkCarriersBundleID:@"com.finalwire.aida64"];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                showResult(@"Framework Carriers", result);
+            });
+        });
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Patch Framework Carrier" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
+        typeof(weakSelf) selfRef = weakSelf;
+        if (!selfRef) return;
+        UIAlertController *confirm = [UIAlertController alertControllerWithTitle:@"Patch Carrier"
+                                                                         message:@"Scans AIDA64 Frameworks, selects an unencrypted Mach-O carrier, injects ProjectXInject.dylib into it, and writes a restore backup."
+                                                                  preferredStyle:UIAlertControllerStyleAlert];
+        [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+        [confirm addAction:[UIAlertAction actionWithTitle:@"Patch" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action2) {
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                NSDictionary *result = [PXDiagnostics patchFrameworkCarrierBundleID:@"com.finalwire.aida64"];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    showResult(@"Patch Carrier", result);
+                });
+            });
+        }]];
+        [selfRef presentViewController:confirm animated:YES completion:nil];
+    }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Patch Prepared Copy" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             NSDictionary *result = [PXDiagnostics patchPreparedInPlaceCopyBundleID:@"com.finalwire.aida64"];

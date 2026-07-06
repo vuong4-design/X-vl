@@ -18,6 +18,8 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSDictionary<NSString *, id> *)injectionSnapshotForBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)dyldLaunchBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)prepareInPlaceBundleID:(NSString *)bundleID;
++ (NSDictionary<NSString *, id> *)scanFrameworkCarriersBundleID:(NSString *)bundleID;
++ (NSDictionary<NSString *, id> *)patchFrameworkCarrierBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)patchPreparedInPlaceCopyBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)exportPatchedTIPABundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)installPatchedInPlaceCopyBundleID:(NSString *)bundleID;

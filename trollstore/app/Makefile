@@ -133,4 +133,5 @@ internal-stage::
 	echo "Using inject dylib: $$INJECT_DYLIB"; \
 	cp "$$INJECT_DYLIB" $(THEOS_STAGING_DIR)/Applications/ProjectXTroll.app/ProjectXInject.dylib; \
 	chmod 755 $(THEOS_STAGING_DIR)/Applications/ProjectXTroll.app/ProjectXInject.dylib
+	@cp $(TROLLSTORE_DIR)/inject/ProjectXInject.entitlements.plist $(THEOS_STAGING_DIR)/Applications/ProjectXTroll.app/ProjectXInject.entitlements.plist
 	@echo "TSRootBinaries declared in trollstore/app/Info.plist"

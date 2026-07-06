@@ -225,6 +225,166 @@ static NSDictionary<NSString *, id> *PXMICodeSignatureSummaryForSlice(NSData *da
     return summary;
 }
 
+static NSDictionary<NSString *, id> *PXMIEncryptionSummaryForSlice(NSData *data, uint64_t offset, uint64_t sliceSize, NSError **error) {
+    if (!PXRangeOK(data.length, offset, sizeof(uint32_t))) {
+        if (error) *error = PXMIError(80, @"Slice out of range");
+        return nil;
+    }
+    uint8_t *base = (uint8_t *)data.bytes;
+    uint32_t magic = *(uint32_t *)(base + offset);
+    BOOL is64 = NO;
+    BOOL swap = NO;
+    if (magic == MH_MAGIC_64 || magic == MH_CIGAM_64) {
+        is64 = YES;
+        swap = (magic == MH_CIGAM_64);
+    } else if (magic == MH_MAGIC || magic == MH_CIGAM) {
+        is64 = NO;
+        swap = (magic == MH_CIGAM);
+    } else {
+        return @{@"supported": @"NO", @"error": [NSString stringWithFormat:@"Unsupported Mach-O slice magic=0x%x", magic]};
+    }
+
+    uint64_t headerSize = is64 ? sizeof(struct mach_header_64) : sizeof(struct mach_header);
+    if (!PXRangeOK(data.length, offset, headerSize)) {
+        if (error) *error = PXMIError(81, @"Mach-O header out of range");
+        return nil;
+    }
+    uint32_t ncmds = 0;
+    uint32_t sizeofcmds = 0;
+    if (is64) {
+        struct mach_header_64 *mh = (struct mach_header_64 *)(base + offset);
+        ncmds = PXSwap32(mh->ncmds, swap);
+        sizeofcmds = PXSwap32(mh->sizeofcmds, swap);
+    } else {
+        struct mach_header *mh = (struct mach_header *)(base + offset);
+        ncmds = PXSwap32(mh->ncmds, swap);
+        sizeofcmds = PXSwap32(mh->sizeofcmds, swap);
+    }
+    uint64_t commandsOffset = offset + headerSize;
+    if (!PXRangeOK(data.length, commandsOffset, sizeofcmds)) {
+        if (error) *error = PXMIError(82, @"Load commands out of range");
+        return nil;
+    }
+
+    NSMutableDictionary *summary = [@{
+        @"supported": @"YES",
+        @"is64": is64 ? @"YES" : @"NO",
+        @"sliceOffset": @(offset),
+        @"sliceSize": @(sliceSize),
+        @"hasEncryptionInfo": @"NO",
+        @"cryptid": @0,
+        @"encrypted": @"NO",
+    } mutableCopy];
+    uint64_t cursor = commandsOffset;
+    for (uint32_t i = 0; i < ncmds; i++) {
+        if (!PXRangeOK(data.length, cursor, sizeof(struct load_command))) break;
+        struct load_command *lc = (struct load_command *)(base + cursor);
+        uint32_t cmd = PXSwap32(lc->cmd, swap);
+        uint32_t cmdsize = PXSwap32(lc->cmdsize, swap);
+        if (cmdsize < sizeof(struct load_command) || !PXRangeOK(data.length, cursor, cmdsize)) break;
+        if (cmd == LC_ENCRYPTION_INFO || cmd == LC_ENCRYPTION_INFO_64) {
+            if (cmdsize >= sizeof(struct encryption_info_command)) {
+                struct encryption_info_command *ec = (struct encryption_info_command *)lc;
+                uint32_t cryptoff = PXSwap32(ec->cryptoff, swap);
+                uint32_t cryptsize = PXSwap32(ec->cryptsize, swap);
+                uint32_t cryptid = PXSwap32(ec->cryptid, swap);
+                summary[@"hasEncryptionInfo"] = @"YES";
+                summary[@"cryptoff"] = @(cryptoff);
+                summary[@"cryptsize"] = @(cryptsize);
+                summary[@"cryptid"] = @(cryptid);
+                summary[@"encrypted"] = cryptid != 0 ? @"YES" : @"NO";
+            }
+            break;
+        }
+        cursor += cmdsize;
+    }
+    return summary;
+}
+
+static NSDictionary<NSString *, id> *PXMILoadCommandSummaryForSlice(NSData *data, uint64_t offset, uint64_t sliceSize, NSError **error) {
+    if (!PXRangeOK(data.length, offset, sizeof(uint32_t))) {
+        if (error) *error = PXMIError(100, @"Slice out of range");
+        return nil;
+    }
+    uint8_t *base = (uint8_t *)data.bytes;
+    uint32_t magic = *(uint32_t *)(base + offset);
+    BOOL is64 = NO;
+    BOOL swap = NO;
+    if (magic == MH_MAGIC_64 || magic == MH_CIGAM_64) {
+        is64 = YES;
+        swap = (magic == MH_CIGAM_64);
+    } else if (magic == MH_MAGIC || magic == MH_CIGAM) {
+        is64 = NO;
+        swap = (magic == MH_CIGAM);
+    } else {
+        return @{@"supported": @"NO", @"error": [NSString stringWithFormat:@"Unsupported Mach-O slice magic=0x%x", magic]};
+    }
+
+    uint64_t headerSize = is64 ? sizeof(struct mach_header_64) : sizeof(struct mach_header);
+    if (!PXRangeOK(data.length, offset, headerSize)) {
+        if (error) *error = PXMIError(101, @"Mach-O header out of range");
+        return nil;
+    }
+    uint32_t ncmds = 0;
+    uint32_t sizeofcmds = 0;
+    if (is64) {
+        struct mach_header_64 *mh = (struct mach_header_64 *)(base + offset);
+        ncmds = PXSwap32(mh->ncmds, swap);
+        sizeofcmds = PXSwap32(mh->sizeofcmds, swap);
+    } else {
+        struct mach_header *mh = (struct mach_header *)(base + offset);
+        ncmds = PXSwap32(mh->ncmds, swap);
+        sizeofcmds = PXSwap32(mh->sizeofcmds, swap);
+    }
+
+    uint64_t commandsOffset = offset + headerSize;
+    if (!PXRangeOK(data.length, commandsOffset, sizeofcmds)) {
+        if (error) *error = PXMIError(102, @"Load commands out of range");
+        return nil;
+    }
+
+    NSMutableArray<NSString *> *dylibs = [NSMutableArray array];
+    NSMutableArray<NSString *> *rpaths = [NSMutableArray array];
+    uint64_t cursor = commandsOffset;
+    for (uint32_t i = 0; i < ncmds; i++) {
+        if (!PXRangeOK(data.length, cursor, sizeof(struct load_command))) break;
+        struct load_command *lc = (struct load_command *)(base + cursor);
+        uint32_t cmd = PXSwap32(lc->cmd, swap);
+        uint32_t cmdsize = PXSwap32(lc->cmdsize, swap);
+        if (cmdsize < sizeof(struct load_command) || !PXRangeOK(data.length, cursor, cmdsize)) break;
+        if (cmd == LC_LOAD_DYLIB || cmd == LC_LOAD_WEAK_DYLIB || cmd == LC_LOAD_UPWARD_DYLIB || cmd == LC_REEXPORT_DYLIB) {
+            struct dylib_command *dc = (struct dylib_command *)lc;
+            uint32_t nameOffset = PXSwap32(dc->dylib.name.offset, swap);
+            if (nameOffset < cmdsize) {
+                char *name = (char *)lc + nameOffset;
+                NSUInteger maxLen = cmdsize - nameOffset;
+                NSString *s = [[NSString alloc] initWithBytes:name length:strnlen(name, maxLen) encoding:NSUTF8StringEncoding];
+                if (s.length) [dylibs addObject:s];
+            }
+        } else if (cmd == LC_RPATH) {
+            struct rpath_command *rc = (struct rpath_command *)lc;
+            uint32_t pathOffset = PXSwap32(rc->path.offset, swap);
+            if (pathOffset < cmdsize) {
+                char *name = (char *)lc + pathOffset;
+                NSUInteger maxLen = cmdsize - pathOffset;
+                NSString *s = [[NSString alloc] initWithBytes:name length:strnlen(name, maxLen) encoding:NSUTF8StringEncoding];
+                if (s.length) [rpaths addObject:s];
+            }
+        }
+        cursor += cmdsize;
+    }
+    return @{
+        @"supported": @"YES",
+        @"is64": is64 ? @"YES" : @"NO",
+        @"sliceOffset": @(offset),
+        @"sliceSize": @(sliceSize),
+        @"ncmds": @(ncmds),
+        @"sizeofcmds": @(sizeofcmds),
+        @"loadedDylibs": dylibs,
+        @"rpaths": rpaths,
+    };
+}
+
 @implementation PXMachOInjector
 
 + (BOOL)insertDylibLoadCommand:(NSString *)dylibLoadPath
@@ -378,6 +538,132 @@ static NSDictionary<NSString *, id> *PXMICodeSignatureSummaryForSlice(NSData *da
         [slices addObject:row];
     }
     summary[@"slices"] = slices;
+    return summary;
+}
+
++ (nullable NSDictionary<NSString *, id> *)encryptionSummaryForMachOAtPath:(NSString *)path
+                                                                      error:(NSError **)error {
+    if (!path.length) {
+        if (error) *error = PXMIError(90, @"Missing Mach-O path");
+        return nil;
+    }
+    NSData *data = [NSData dataWithContentsOfFile:path];
+    if (!data.length) {
+        if (error) *error = PXMIError(91, @"Failed to read Mach-O: %@", path);
+        return nil;
+    }
+    if (!PXRangeOK(data.length, 0, sizeof(uint32_t))) {
+        if (error) *error = PXMIError(92, @"Mach-O too small: %@", path);
+        return nil;
+    }
+
+    NSMutableDictionary *summary = [@{
+        @"path": path ?: @"",
+        @"fileSize": @(data.length),
+        @"isFat": @"NO",
+        @"encrypted": @"NO",
+    } mutableCopy];
+    uint8_t *base = (uint8_t *)data.bytes;
+    uint32_t magic = *(uint32_t *)base;
+    NSMutableArray *slices = [NSMutableArray array];
+    BOOL encryptedAny = NO;
+    if (magic == FAT_MAGIC || magic == FAT_CIGAM) {
+        BOOL swap = (magic == FAT_CIGAM);
+        struct fat_header *fh = (struct fat_header *)base;
+        uint32_t nfat = PXSwap32(fh->nfat_arch, swap);
+        if (!PXRangeOK(data.length, sizeof(struct fat_header), (uint64_t)nfat * sizeof(struct fat_arch))) {
+            if (error) *error = PXMIError(93, @"Malformed fat header");
+            return nil;
+        }
+        summary[@"isFat"] = @"YES";
+        summary[@"nfat"] = @(nfat);
+        struct fat_arch *arch = (struct fat_arch *)(base + sizeof(struct fat_header));
+        for (uint32_t i = 0; i < nfat; i++) {
+            uint32_t off = PXSwap32(arch[i].offset, swap);
+            uint32_t size = PXSwap32(arch[i].size, swap);
+            NSError *sliceErr = nil;
+            NSDictionary *slice = PXMIEncryptionSummaryForSlice(data, off, size, &sliceErr);
+            NSMutableDictionary *row = [NSMutableDictionary dictionaryWithDictionary:slice ?: @{}];
+            row[@"index"] = @(i);
+            if (sliceErr) row[@"error"] = sliceErr.localizedDescription ?: @"";
+            if ([row[@"encrypted"] isEqual:@"YES"]) encryptedAny = YES;
+            [slices addObject:row];
+        }
+    } else {
+        NSError *sliceErr = nil;
+        NSDictionary *slice = PXMIEncryptionSummaryForSlice(data, 0, data.length, &sliceErr);
+        NSMutableDictionary *row = [NSMutableDictionary dictionaryWithDictionary:slice ?: @{}];
+        row[@"index"] = @0;
+        if (sliceErr) row[@"error"] = sliceErr.localizedDescription ?: @"";
+        if ([row[@"encrypted"] isEqual:@"YES"]) encryptedAny = YES;
+        [slices addObject:row];
+    }
+    summary[@"slices"] = slices;
+    summary[@"encrypted"] = encryptedAny ? @"YES" : @"NO";
+    return summary;
+}
+
++ (nullable NSDictionary<NSString *, id> *)loadCommandSummaryForMachOAtPath:(NSString *)path
+                                                                       error:(NSError **)error {
+    if (!path.length) {
+        if (error) *error = PXMIError(110, @"Missing Mach-O path");
+        return nil;
+    }
+    NSData *data = [NSData dataWithContentsOfFile:path];
+    if (!data.length) {
+        if (error) *error = PXMIError(111, @"Failed to read Mach-O: %@", path);
+        return nil;
+    }
+    if (!PXRangeOK(data.length, 0, sizeof(uint32_t))) {
+        if (error) *error = PXMIError(112, @"Mach-O too small: %@", path);
+        return nil;
+    }
+    NSMutableDictionary *summary = [@{
+        @"path": path ?: @"",
+        @"fileSize": @(data.length),
+        @"isFat": @"NO",
+    } mutableCopy];
+    uint8_t *base = (uint8_t *)data.bytes;
+    uint32_t magic = *(uint32_t *)base;
+    NSMutableArray *slices = [NSMutableArray array];
+    NSMutableOrderedSet<NSString *> *allDylibs = [NSMutableOrderedSet orderedSet];
+    NSMutableOrderedSet<NSString *> *allRpaths = [NSMutableOrderedSet orderedSet];
+    if (magic == FAT_MAGIC || magic == FAT_CIGAM) {
+        BOOL swap = (magic == FAT_CIGAM);
+        struct fat_header *fh = (struct fat_header *)base;
+        uint32_t nfat = PXSwap32(fh->nfat_arch, swap);
+        if (!PXRangeOK(data.length, sizeof(struct fat_header), (uint64_t)nfat * sizeof(struct fat_arch))) {
+            if (error) *error = PXMIError(113, @"Malformed fat header");
+            return nil;
+        }
+        summary[@"isFat"] = @"YES";
+        summary[@"nfat"] = @(nfat);
+        struct fat_arch *arch = (struct fat_arch *)(base + sizeof(struct fat_header));
+        for (uint32_t i = 0; i < nfat; i++) {
+            uint32_t off = PXSwap32(arch[i].offset, swap);
+            uint32_t size = PXSwap32(arch[i].size, swap);
+            NSError *sliceErr = nil;
+            NSDictionary *slice = PXMILoadCommandSummaryForSlice(data, off, size, &sliceErr);
+            NSMutableDictionary *row = [NSMutableDictionary dictionaryWithDictionary:slice ?: @{}];
+            row[@"index"] = @(i);
+            if (sliceErr) row[@"error"] = sliceErr.localizedDescription ?: @"";
+            for (NSString *s in row[@"loadedDylibs"] ?: @[]) [allDylibs addObject:s];
+            for (NSString *s in row[@"rpaths"] ?: @[]) [allRpaths addObject:s];
+            [slices addObject:row];
+        }
+    } else {
+        NSError *sliceErr = nil;
+        NSDictionary *slice = PXMILoadCommandSummaryForSlice(data, 0, data.length, &sliceErr);
+        NSMutableDictionary *row = [NSMutableDictionary dictionaryWithDictionary:slice ?: @{}];
+        row[@"index"] = @0;
+        if (sliceErr) row[@"error"] = sliceErr.localizedDescription ?: @"";
+        for (NSString *s in row[@"loadedDylibs"] ?: @[]) [allDylibs addObject:s];
+        for (NSString *s in row[@"rpaths"] ?: @[]) [allRpaths addObject:s];
+        [slices addObject:row];
+    }
+    summary[@"slices"] = slices;
+    summary[@"loadedDylibs"] = allDylibs.array;
+    summary[@"rpaths"] = allRpaths.array;
     return summary;
 }
 

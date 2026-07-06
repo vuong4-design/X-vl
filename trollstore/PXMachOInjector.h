@@ -19,6 +19,12 @@ extern NSString * const PXMachOInjectorErrorDomain;
 + (nullable NSDictionary<NSString *, id> *)codeSignatureSummaryForMachOAtPath:(NSString *)path
                                                                          error:(NSError **)error;
 
++ (nullable NSDictionary<NSString *, id> *)encryptionSummaryForMachOAtPath:(NSString *)path
+                                                                      error:(NSError **)error;
+
++ (nullable NSDictionary<NSString *, id> *)loadCommandSummaryForMachOAtPath:(NSString *)path
+                                                                       error:(NSError **)error;
+
 @end
 
 NS_ASSUME_NONNULL_END
