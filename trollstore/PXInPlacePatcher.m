@@ -435,6 +435,7 @@ static NSDictionary<NSString *, id> *PXIPTrySignPath(NSString *path, NSString *e
         newState[@"signatureStatus"] = @"not-checked";
         newState[@"installedAt"] = @([[NSDate date] timeIntervalSince1970]);
         PXIPWriteState(bundleID, newState);
+        result[@"state"] = newState ?: @{};
         result[@"verificationDeferred"] = @"YES";
         result[@"signatureStatus"] = @"not-checked";
         result[@"note"] = @"Executable installed; run In-Place Status separately to verify load command.";

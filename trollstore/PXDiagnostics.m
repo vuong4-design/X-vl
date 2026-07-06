@@ -270,7 +270,9 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
 + (NSDictionary<NSString *,id> *)inPlaceStatusBundleID:(NSString *)bundleID {
     NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
     [self log:@"[patch] diagnostic status bundleID=%@", targetBundleID];
-    return [PXInPlacePatcher statusForBundleID:targetBundleID];
+    NSDictionary *status = [PXInPlacePatcher statusForBundleID:targetBundleID];
+    [self log:@"[patch] status result=%@", status ?: @{}];
+    return status;
 }
 
 @end
