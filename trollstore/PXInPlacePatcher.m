@@ -251,11 +251,12 @@ static uint32_t PXIPDOSDateTime(NSDate *date) {
 
 static BOOL PXIPEnumerateFiles(NSString *root, NSMutableArray<NSString *> *relativeFiles, NSError **error) {
     NSFileManager *fm = [NSFileManager defaultManager];
+    __block NSError *enumerationError = nil;
     NSDirectoryEnumerator *en = [fm enumeratorAtURL:[NSURL fileURLWithPath:root isDirectory:YES]
                         includingPropertiesForKeys:@[NSURLIsRegularFileKey, NSURLIsSymbolicLinkKey]
                                            options:0
                                       errorHandler:^BOOL(__unused NSURL *url, NSError *err) {
-        if (error && !*error) *error = err;
+        if (!enumerationError) enumerationError = err;
         return NO;
     }];
     NSURL *url = nil;
@@ -270,7 +271,8 @@ static BOOL PXIPEnumerateFiles(NSString *root, NSMutableArray<NSString *> *relat
         [relativeFiles addObject:[path substringFromIndex:root.length + 1]];
     }
     [relativeFiles sortUsingSelector:@selector(compare:)];
-    return error ? (*error == nil) : YES;
+    if (enumerationError && error) *error = enumerationError;
+    return enumerationError == nil;
 }
 
 static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError **error) {
@@ -665,7 +667,6 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
             PXWaitForProcessesToExit(@[executableName], 2.0);
         }
 
-        NSString *rootErr = nil;
         [PXDiagnostics log:@"[patch] installing patched copy source=%@ executable=%@", patchedCopy ?: @"", executablePath ?: @""];
         NSDictionary *replaceExecutable = PXIPRunRootDetailed(@[@"installfile", patchedCopy, executablePath]);
         result[@"replaceExecutable"] = replaceExecutable ?: @{};
