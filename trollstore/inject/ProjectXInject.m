@@ -60,6 +60,8 @@ static BOOL PXSnapshotBool(NSString *key, BOOL defaultValue) {
     return defaultValue;
 }
 
+static NSUInteger PXSnapshotUnsignedInteger(NSString *key);
+
 static NSOperatingSystemVersion PXSnapshotOSVersion(void) {
     NSOperatingSystemVersion fallback = {0, 0, 0};
     NSString *version = PXSnapshotString(@"IOSVersion");
@@ -772,7 +774,7 @@ static int px_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *
             if (isUInt64) {
                 copied = PXCopyUInt64ToSysctlBuffer((uint64_t)metricsValue.longLongValue, oldp, oldlenp);
             } else {
-                copied = PXCopyUInt32ToSysctlBuffer((uint32_t)metricsValue.unsignedIntValue, oldp, oldlenp);
+                copied = PXCopyUInt32ToSysctlBuffer((uint32_t)metricsValue.longLongValue, oldp, oldlenp);
             }
             PXRecordHookCall(@"sysctlbyname-metrics", [NSString stringWithUTF8String:name] ?: @"", metricsValue, YES, copied);
             PXInjectLog(@"c-hook mode=%@ sysctlbyname metrics %s -> %@ copied=%@", PXSnapshotString(@"CHookTestMode") ?: @"", name, metricsValue, copied ? @"YES" : @"NO");
@@ -801,7 +803,7 @@ static int px_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void
                 if ([sysctlName isEqualToString:@"hw.memsize"]) {
                     copied = PXCopyUInt64ToSysctlBuffer((uint64_t)value.longLongValue, oldp, oldlenp);
                 } else if (metricsInteger) {
-                    copied = PXCopyUInt32ToSysctlBuffer((uint32_t)value.unsignedIntValue, oldp, oldlenp);
+                    copied = PXCopyUInt32ToSysctlBuffer((uint32_t)value.longLongValue, oldp, oldlenp);
                 } else {
                     copied = PXCopyCStringToSysctlBuffer(value, oldp, oldlenp);
                 }
