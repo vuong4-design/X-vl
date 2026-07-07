@@ -59,6 +59,7 @@ static NSString *PXIPFilePermissions(NSString *path) {
 static NSDictionary<NSString *, id> *PXIPSafeSysctlByNameOptions(void) {
     return @{@"CHookTestMode": @"sysctlbyname-safe",
              @"EnableSysctlByNameHook": @YES,
+             @"EnableSysctlHook": @YES,
              @"EnableMobileGestaltHook": @YES,
              @"EnableSysctlName_hw.machine": @YES,
              @"EnableSysctlName_hw.model": @YES,

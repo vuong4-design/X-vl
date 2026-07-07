@@ -261,6 +261,7 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
                                                               enableCHooks:YES
                                                               cHookOptions:@{@"CHookTestMode": @"sysctlbyname-safe",
                                                                              @"EnableSysctlByNameHook": @YES,
+                                                                             @"EnableSysctlHook": @YES,
                                                                              @"EnableMobileGestaltHook": @YES,
                                                                              @"EnableSysctlName_hw.machine": @YES,
                                                                              @"EnableSysctlName_hw.model": @YES,
@@ -274,7 +275,8 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     info[@"EnableObjCHooks"] = snapshot[@"EnableObjCHooks"] ?: @"";
     info[@"EnableCHooks"] = snapshot[@"EnableCHooks"] ?: @"";
     info[@"CHookTestMode"] = snapshot[@"CHookTestMode"] ?: @"";
-    info[@"note"] = @"ObjC and safe sysctlbyname C hook will be active on next target launch. Reopen the target app, then check Injection Marker Status.";
+    info[@"EnableSysctlHook"] = snapshot[@"EnableSysctlHook"] ?: @"";
+    info[@"note"] = @"ObjC, safe sysctlbyname, and bundle-local sysctl MIB rebind will be active on next target launch. Reopen the target app, then check Injection Marker Status.";
     [self log:@"[inject] c hooks snapshot status=%@", info];
     return info;
 }

@@ -20,11 +20,14 @@ static NSDictionary *gSnapshot = nil;
 static NSString *gBundleID = nil;
 static BOOL gCHooksReady = NO;
 static BOOL gEnableSysctlByNameHook = NO;
+static BOOL gEnableSysctlHook = NO;
 static BOOL gEnableMobileGestaltHook = NO;
 static NSMutableDictionary *gHookStats = nil;
 static __thread BOOL gRecordingStats = NO;
 static NSUInteger gMobileGestaltImagesScanned = 0;
 static NSUInteger gMobileGestaltSymbolsPatched = 0;
+static NSUInteger gSysctlImagesScanned = 0;
+static NSUInteger gSysctlSymbolsPatched = 0;
 
 static id PXSnapshotObject(NSString *key) {
     id value = gSnapshot[key];
@@ -102,6 +105,29 @@ static NSString *PXValueForSysctlName(const char *name) {
     if (strcmp(name, "kern.osversion") == 0 && PXSysctlNameEnabled(@"kern.osversion")) return PXSnapshotString(@"IOSBuild");
     if (strcmp(name, "kern.version") == 0 && PXSysctlNameEnabled(@"kern.version")) return PXSnapshotString(@"KernelVersion");
     return nil;
+}
+
+static NSString *PXValueForSysctlMIB(const int *name, u_int namelen, NSString **nameOut) {
+    if (!name || namelen < 2) return nil;
+    NSString *sysctlName = nil;
+    NSString *value = nil;
+
+    if (name[0] == CTL_HW && name[1] == HW_MACHINE) {
+        sysctlName = @"hw.machine";
+        value = PXSysctlNameEnabled(sysctlName) ? PXSnapshotString(@"DeviceModel") : nil;
+    } else if (name[0] == CTL_HW && name[1] == HW_MODEL) {
+        sysctlName = @"hw.model";
+        value = PXSysctlNameEnabled(sysctlName) ? (PXSnapshotString(@"HwModel") ?: PXSnapshotString(@"BoardID")) : nil;
+    } else if (name[0] == CTL_KERN && name[1] == KERN_OSVERSION) {
+        sysctlName = @"kern.osversion";
+        value = PXSysctlNameEnabled(sysctlName) ? PXSnapshotString(@"IOSBuild") : nil;
+    } else if (name[0] == CTL_KERN && name[1] == KERN_VERSION) {
+        sysctlName = @"kern.version";
+        value = PXSysctlNameEnabled(sysctlName) ? PXSnapshotString(@"KernelVersion") : nil;
+    }
+
+    if (nameOut) *nameOut = sysctlName;
+    return value;
 }
 
 static NSString *PXSafeBundleID(void) {
@@ -254,6 +280,7 @@ static void PXWriteLoadedMarker(void) {
         @"EnableCHooks": @(PXSnapshotBool(@"EnableCHooks", NO)),
         @"CHookTestMode": PXSnapshotString(@"CHookTestMode") ?: @"",
         @"EnableSysctlByNameHook": @(PXSnapshotBool(@"EnableSysctlByNameHook", NO)),
+        @"EnableSysctlHook": @(PXSnapshotBool(@"EnableSysctlHook", NO)),
         @"EnableMobileGestaltHook": @(PXSnapshotBool(@"EnableMobileGestaltHook", NO)),
         @"processID": @([[NSProcessInfo processInfo] processIdentifier]),
         @"hookStatsPath": PXLocalHookStatsPath(),
@@ -351,8 +378,11 @@ static void PXInstallObjCHooks(void) {
 }
 
 static int (*orig_sysctlbyname)(const char *, void *, size_t *, void *, size_t) = NULL;
+static int (*orig_sysctl)(int *, u_int, void *, size_t *, void *, size_t) = NULL;
 static CFTypeRef (*orig_MGCopyAnswer)(CFStringRef) = NULL;
 static CFTypeRef (*orig_MGCopyAnswerWithError)(CFStringRef, int *) = NULL;
+
+static int px_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
 
 static CFTypeRef PXCopyRetainedString(NSString *value) {
     return value.length ? CFBridgingRetain(value) : NULL;
@@ -424,8 +454,8 @@ static uintptr_t PXSlideForHeader(const struct mach_header_64 *header) {
     return 0;
 }
 
-static void PXRebindSymbolInImage(const struct mach_header_64 *header, const char *symbolName, const void *replacement, void **originalOut) {
-    if (!header || header->magic != MH_MAGIC_64 || !symbolName || !replacement) return;
+static NSUInteger PXRebindSymbolInImage(const struct mach_header_64 *header, const char *symbolName, const void *replacement, void **originalOut) {
+    if (!header || header->magic != MH_MAGIC_64 || !symbolName || !replacement) return 0;
 
     uintptr_t slide = PXSlideForHeader(header);
     const struct load_command *cmd = (const struct load_command *)((const uint8_t *)header + sizeof(struct mach_header_64));
@@ -444,13 +474,14 @@ static void PXRebindSymbolInImage(const struct mach_header_64 *header, const cha
         }
         cmd = (const struct load_command *)((const uint8_t *)cmd + cmd->cmdsize);
     }
-    if (!linkedit || !symtab || !dysymtab) return;
+    if (!linkedit || !symtab || !dysymtab) return 0;
 
     uintptr_t linkeditBase = slide + linkedit->vmaddr - linkedit->fileoff;
     const struct nlist_64 *symbols = (const struct nlist_64 *)(linkeditBase + symtab->symoff);
     const char *strings = (const char *)(linkeditBase + symtab->stroff);
     const uint32_t *indirectSymbols = (const uint32_t *)(linkeditBase + dysymtab->indirectsymoff);
 
+    NSUInteger patched = 0;
     cmd = (const struct load_command *)((const uint8_t *)header + sizeof(struct mach_header_64));
     for (uint32_t i = 0; i < header->ncmds; i++) {
         if (cmd->cmd == LC_SEGMENT_64) {
@@ -471,13 +502,14 @@ static void PXRebindSymbolInImage(const struct mach_header_64 *header, const cha
                     vm_address_t page = (vm_address_t)((uintptr_t)&pointers[k] & ~(uintptr_t)(vm_page_size - 1));
                     vm_protect(mach_task_self(), page, vm_page_size, false, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
                     pointers[k] = (void *)replacement;
-                    gMobileGestaltSymbolsPatched++;
+                    patched++;
                     PXRecordHookCall(@"rebind", [NSString stringWithUTF8String:symbolName] ?: @"", @"patched", YES, YES);
                 }
             }
         }
         cmd = (const struct load_command *)((const uint8_t *)cmd + cmd->cmdsize);
     }
+    return patched;
 }
 
 static void PXRebindMobileGestalt(void) {
@@ -489,15 +521,34 @@ static void PXRebindMobileGestalt(void) {
         if (bundlePath.length && ![path hasPrefix:bundlePath]) continue;
         gMobileGestaltImagesScanned++;
         const struct mach_header_64 *header = (const struct mach_header_64 *)_dyld_get_image_header(i);
-        PXRebindSymbolInImage(header, "_MGCopyAnswer", (const void *)px_MGCopyAnswer, (void **)&orig_MGCopyAnswer);
-        PXRebindSymbolInImage(header, "_MGCopyAnswerWithError", (const void *)px_MGCopyAnswerWithError, (void **)&orig_MGCopyAnswerWithError);
+        gMobileGestaltSymbolsPatched += PXRebindSymbolInImage(header, "_MGCopyAnswer", (const void *)px_MGCopyAnswer, (void **)&orig_MGCopyAnswer);
+        gMobileGestaltSymbolsPatched += PXRebindSymbolInImage(header, "_MGCopyAnswerWithError", (const void *)px_MGCopyAnswerWithError, (void **)&orig_MGCopyAnswerWithError);
     }
     PXRecordHookCall(@"rebind-summary", @"MobileGestalt", [NSString stringWithFormat:@"images=%lu patched=%lu", (unsigned long)gMobileGestaltImagesScanned, (unsigned long)gMobileGestaltSymbolsPatched], gMobileGestaltSymbolsPatched > 0, gMobileGestaltSymbolsPatched > 0);
+}
+
+static void PXRebindSysctl(void) {
+    NSString *bundlePath = PXNormalizePath([[NSBundle mainBundle] bundlePath]);
+    uint32_t count = _dyld_image_count();
+    for (uint32_t i = 0; i < count; i++) {
+        const char *imageName = _dyld_get_image_name(i);
+        NSString *path = imageName ? PXNormalizePath([NSString stringWithUTF8String:imageName]) : @"";
+        if (bundlePath.length && ![path hasPrefix:bundlePath]) continue;
+        gSysctlImagesScanned++;
+        const struct mach_header_64 *header = (const struct mach_header_64 *)_dyld_get_image_header(i);
+        gSysctlSymbolsPatched += PXRebindSymbolInImage(header, "_sysctl", (const void *)px_sysctl, (void **)&orig_sysctl);
+    }
+    PXRecordHookCall(@"rebind-summary", @"sysctl", [NSString stringWithFormat:@"images=%lu patched=%lu", (unsigned long)gSysctlImagesScanned, (unsigned long)gSysctlSymbolsPatched], gSysctlSymbolsPatched > 0, gSysctlSymbolsPatched > 0);
 }
 
 static int PXCallOrigSysctlByName(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
     if (!orig_sysctlbyname) orig_sysctlbyname = dlsym(RTLD_NEXT, "sysctlbyname");
     return orig_sysctlbyname ? orig_sysctlbyname(name, oldp, oldlenp, newp, newlen) : -1;
+}
+
+static int PXCallOrigSysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
+    if (!orig_sysctl) orig_sysctl = dlsym(RTLD_NEXT, "sysctl");
+    return orig_sysctl ? orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen) : -1;
 }
 
 static int px_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
@@ -514,6 +565,23 @@ static int px_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *
     return PXCallOrigSysctlByName(name, oldp, oldlenp, newp, newlen);
 }
 
+static int px_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
+    if (gCHooksReady && gEnableSysctlHook && name && !newp && newlen == 0) {
+        NSString *sysctlName = nil;
+        NSString *value = PXValueForSysctlMIB(name, namelen, &sysctlName);
+        if (sysctlName.length) {
+            if (value.length) {
+                BOOL copied = PXCopyCStringToSysctlBuffer(value, oldp, oldlenp);
+                PXRecordHookCall(@"sysctl", sysctlName, value, YES, copied);
+                PXInjectLog(@"c-hook mode=%@ sysctl %@ -> %@ copied=%@", PXSnapshotString(@"CHookTestMode") ?: @"", sysctlName, value, copied ? @"YES" : @"NO");
+                return copied ? 0 : -1;
+            }
+            PXRecordHookCall(@"sysctl", sysctlName, @"", NO, NO);
+        }
+    }
+    return PXCallOrigSysctl(name, namelen, oldp, oldlenp, newp, newlen);
+}
+
 __attribute__((used)) static struct { const void *replacement; const void *replacee; } PXInterposes[] __attribute__((section("__DATA,__interpose"))) = {
     { (const void *)px_sysctlbyname, (const void *)sysctlbyname },
 };
@@ -521,20 +589,27 @@ __attribute__((used)) static struct { const void *replacement; const void *repla
 static void PXInstallCHooks(void) {
     gCHooksReady = NO;
     orig_sysctlbyname = dlsym(RTLD_NEXT, "sysctlbyname");
+    orig_sysctl = dlsym(RTLD_NEXT, "sysctl");
     orig_MGCopyAnswer = dlsym(RTLD_NEXT, "MGCopyAnswer");
     if (!orig_MGCopyAnswer) orig_MGCopyAnswer = dlsym(RTLD_DEFAULT, "MGCopyAnswer");
     orig_MGCopyAnswerWithError = dlsym(RTLD_NEXT, "MGCopyAnswerWithError");
     if (!orig_MGCopyAnswerWithError) orig_MGCopyAnswerWithError = dlsym(RTLD_DEFAULT, "MGCopyAnswerWithError");
     gEnableSysctlByNameHook = PXSnapshotBool(@"EnableSysctlByNameHook", YES);
+    gEnableSysctlHook = PXSnapshotBool(@"EnableSysctlHook", NO);
     gEnableMobileGestaltHook = PXSnapshotBool(@"EnableMobileGestaltHook", NO);
     gCHooksReady = YES;
+    if (gEnableSysctlHook) {
+        PXRebindSysctl();
+    }
     if (gEnableMobileGestaltHook) {
         PXRebindMobileGestalt();
     }
-    PXInjectLog(@"C hooks enabled mode=%@ sysctlbyname=%p enabled=%@ MGCopyAnswer=%p MGCopyAnswerWithError=%p MobileGestalt enabled=%@",
+    PXInjectLog(@"C hooks enabled mode=%@ sysctlbyname=%p enabled=%@ sysctl=%p enabled=%@ MGCopyAnswer=%p MGCopyAnswerWithError=%p MobileGestalt enabled=%@",
                 PXSnapshotString(@"CHookTestMode") ?: @"",
                 orig_sysctlbyname,
                 gEnableSysctlByNameHook ? @"YES" : @"NO",
+                orig_sysctl,
+                gEnableSysctlHook ? @"YES" : @"NO",
                 orig_MGCopyAnswer,
                 orig_MGCopyAnswerWithError,
                 gEnableMobileGestaltHook ? @"YES" : @"NO");
