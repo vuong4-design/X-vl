@@ -902,6 +902,14 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         result[@"rootInstalledCarrierInfoAfterChown"] = PXIPRunRootDetailed(@[@"fileinfo", carrierPath]);
         result[@"rootTargetDylibInfoAfterChown"] = PXIPRunRootDetailed(@[@"fileinfo", targetDylib]);
 
+        if (executableName.length) {
+            [PXDiagnostics log:@"[carrier] killing target process after install name=%@", executableName];
+            BOOL killAfterInstall = PXKillallTermThenKill(executableName, 0.5);
+            BOOL exitedAfterInstall = PXWaitForProcessesToExit(@[executableName], 2.0);
+            result[@"killAfterInstall"] = killAfterInstall ? @"YES" : @"NO";
+            result[@"exitedAfterInstall"] = exitedAfterInstall ? @"YES" : @"NO";
+        }
+
         NSDictionary *finalCarrierContains = result[@"rootInstalledCarrierContainsLoadPathAfterToolCopy"] ?: result[@"rootInstalledCarrierContainsLoadPathAfterOverwrite"] ?: result[@"rootInstalledCarrierContainsLoadPath"] ?: @{};
         NSDictionary *finalDylibInfo = result[@"rootTargetDylibInfoAfterChown"] ?: result[@"rootTargetDylibInfoAfterSizeMismatchToolCopy"] ?: result[@"rootTargetDylibInfoAfterToolCopy"] ?: result[@"rootTargetDylibInfoAfterCopy"] ?: @{};
         BOOL carrierVerified = [finalCarrierContains[@"ok"] isEqual:@"YES"];

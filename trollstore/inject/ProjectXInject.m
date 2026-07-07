@@ -23,6 +23,8 @@ static BOOL gEnableSysctlByNameHook = NO;
 static BOOL gEnableMobileGestaltHook = NO;
 static NSMutableDictionary *gHookStats = nil;
 static __thread BOOL gRecordingStats = NO;
+static NSUInteger gMobileGestaltImagesScanned = 0;
+static NSUInteger gMobileGestaltSymbolsPatched = 0;
 
 static id PXSnapshotObject(NSString *key) {
     id value = gSnapshot[key];
@@ -469,6 +471,7 @@ static void PXRebindSymbolInImage(const struct mach_header_64 *header, const cha
                     vm_address_t page = (vm_address_t)((uintptr_t)&pointers[k] & ~(uintptr_t)(vm_page_size - 1));
                     vm_protect(mach_task_self(), page, vm_page_size, false, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
                     pointers[k] = (void *)replacement;
+                    gMobileGestaltSymbolsPatched++;
                     PXRecordHookCall(@"rebind", [NSString stringWithUTF8String:symbolName] ?: @"", @"patched", YES, YES);
                 }
             }
@@ -484,10 +487,12 @@ static void PXRebindMobileGestalt(void) {
         const char *imageName = _dyld_get_image_name(i);
         NSString *path = imageName ? PXNormalizePath([NSString stringWithUTF8String:imageName]) : @"";
         if (bundlePath.length && ![path hasPrefix:bundlePath]) continue;
+        gMobileGestaltImagesScanned++;
         const struct mach_header_64 *header = (const struct mach_header_64 *)_dyld_get_image_header(i);
         PXRebindSymbolInImage(header, "_MGCopyAnswer", (const void *)px_MGCopyAnswer, (void **)&orig_MGCopyAnswer);
         PXRebindSymbolInImage(header, "_MGCopyAnswerWithError", (const void *)px_MGCopyAnswerWithError, (void **)&orig_MGCopyAnswerWithError);
     }
+    PXRecordHookCall(@"rebind-summary", @"MobileGestalt", [NSString stringWithFormat:@"images=%lu patched=%lu", (unsigned long)gMobileGestaltImagesScanned, (unsigned long)gMobileGestaltSymbolsPatched], gMobileGestaltSymbolsPatched > 0, gMobileGestaltSymbolsPatched > 0);
 }
 
 static int PXCallOrigSysctlByName(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
