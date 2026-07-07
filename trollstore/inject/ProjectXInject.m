@@ -5,6 +5,10 @@
 #import <objc/runtime.h>
 #import <dlfcn.h>
 #import <errno.h>
+#import <mach-o/dyld.h>
+#import <mach-o/loader.h>
+#import <mach-o/nlist.h>
+#import <mach/mach.h>
 #import <stdarg.h>
 #import <string.h>
 #import <sys/sysctl.h>
@@ -16,7 +20,9 @@ static NSDictionary *gSnapshot = nil;
 static NSString *gBundleID = nil;
 static BOOL gCHooksReady = NO;
 static BOOL gEnableSysctlByNameHook = NO;
+static BOOL gEnableMobileGestaltHook = NO;
 static NSMutableDictionary *gHookStats = nil;
+static __thread BOOL gRecordingStats = NO;
 
 static id PXSnapshotObject(NSString *key) {
     id value = gSnapshot[key];
@@ -101,6 +107,11 @@ static NSString *PXSafeBundleID(void) {
     return bid.length ? bid : [[NSProcessInfo processInfo] processName];
 }
 
+static NSString *PXNormalizePath(NSString *path) {
+    if ([path hasPrefix:@"/private/var/"]) return [path stringByReplacingOccurrencesOfString:@"/private/var/" withString:@"/var/" options:0 range:NSMakeRange(0, @"/private/var/".length)];
+    return path ?: @"";
+}
+
 static NSString *PXSnapshotPathForBundleID(NSString *bundleID) {
     NSString *name = bundleID.length ? bundleID : @"unknown";
     return [[[PXInjectBaseDir stringByAppendingPathComponent:@"RuntimeSnapshots"] stringByAppendingPathComponent:name] stringByAppendingPathExtension:@"plist"];
@@ -163,6 +174,8 @@ static void PXInjectLog(NSString *format, ...) {
 
 static void PXRecordHookCall(NSString *category, NSString *name, NSString *value, BOOL spoofed, BOOL copied) {
     if (!category.length || !name.length) return;
+    if (gRecordingStats) return;
+    gRecordingStats = YES;
     @autoreleasepool {
         [[NSFileManager defaultManager] createDirectoryAtPath:PXLocalProjectXDirectory() withIntermediateDirectories:YES attributes:nil error:nil];
         if (!gHookStats) {
@@ -206,6 +219,7 @@ static void PXRecordHookCall(NSString *category, NSString *name, NSString *value
             [gHookStats writeToFile:PXLocalHookStatsPath() atomically:YES];
         }
     }
+    gRecordingStats = NO;
 }
 
 static void PXLoadSnapshot(void) {
@@ -238,6 +252,7 @@ static void PXWriteLoadedMarker(void) {
         @"EnableCHooks": @(PXSnapshotBool(@"EnableCHooks", NO)),
         @"CHookTestMode": PXSnapshotString(@"CHookTestMode") ?: @"",
         @"EnableSysctlByNameHook": @(PXSnapshotBool(@"EnableSysctlByNameHook", NO)),
+        @"EnableMobileGestaltHook": @(PXSnapshotBool(@"EnableMobileGestaltHook", NO)),
         @"processID": @([[NSProcessInfo processInfo] processIdentifier]),
         @"hookStatsPath": PXLocalHookStatsPath(),
         @"snapshotPath": PXSnapshotPathForBundleID(gBundleID ?: @""),
@@ -335,6 +350,145 @@ static void PXInstallObjCHooks(void) {
 
 static int (*orig_sysctlbyname)(const char *, void *, size_t *, void *, size_t) = NULL;
 static CFTypeRef (*orig_MGCopyAnswer)(CFStringRef) = NULL;
+static CFTypeRef (*orig_MGCopyAnswerWithError)(CFStringRef, int *) = NULL;
+
+static CFTypeRef PXCopyRetainedString(NSString *value) {
+    return value.length ? CFBridgingRetain(value) : NULL;
+}
+
+static CFTypeRef PXMobileGestaltSpoofValue(CFStringRef property) {
+    if (!property) return NULL;
+    NSString *key = (__bridge NSString *)property;
+    if (![key isKindOfClass:[NSString class]] || !key.length) return NULL;
+
+    if ([key isEqualToString:@"ProductType"] || [key isEqualToString:@"DeviceClassNumber"] || [key isEqualToString:@"HardwarePlatform"] || [key isEqualToString:@"HWModelStr"]) {
+        return PXCopyRetainedString(PXSnapshotString(@"DeviceModel") ?: PXSnapshotString(@"HwModel") ?: PXSnapshotString(@"BoardID"));
+    }
+    if ([key isEqualToString:@"ProductName"]) {
+        return PXCopyRetainedString(PXSnapshotString(@"SystemName") ?: @"iOS");
+    }
+    if ([key isEqualToString:@"ProductVersion"]) {
+        return PXCopyRetainedString(PXSnapshotString(@"IOSVersion"));
+    }
+    if ([key isEqualToString:@"BuildVersion"] || [key isEqualToString:@"ReleaseType"]) {
+        return PXCopyRetainedString(PXSnapshotString(@"IOSBuild"));
+    }
+    if ([key isEqualToString:@"UserAssignedDeviceName"]) {
+        return PXCopyRetainedString(PXSnapshotString(@"DeviceName"));
+    }
+    if ([key isEqualToString:@"MarketingProductName"] || [key isEqualToString:@"DeviceVariant"]) {
+        return PXCopyRetainedString(PXSnapshotString(@"DeviceModelName") ?: PXSnapshotString(@"DeviceModel"));
+    }
+    if ([key isEqualToString:@"BoardId"] || [key isEqualToString:@"BoardID"]) {
+        return PXCopyRetainedString(PXSnapshotString(@"BoardID") ?: PXSnapshotString(@"HwModel"));
+    }
+    return NULL;
+}
+
+static CFTypeRef px_MGCopyAnswer(CFStringRef property) {
+    if (gCHooksReady && gEnableMobileGestaltHook) {
+        CFTypeRef value = PXMobileGestaltSpoofValue(property);
+        NSString *key = property ? (__bridge NSString *)property : @"";
+        if (value) {
+            PXRecordHookCall(@"MobileGestalt", key ?: @"", [(__bridge id)value description] ?: @"", YES, YES);
+            return value;
+        }
+        PXRecordHookCall(@"MobileGestalt", key ?: @"", @"", NO, NO);
+    }
+    return orig_MGCopyAnswer ? orig_MGCopyAnswer(property) : NULL;
+}
+
+static CFTypeRef px_MGCopyAnswerWithError(CFStringRef property, int *error) {
+    if (gCHooksReady && gEnableMobileGestaltHook) {
+        CFTypeRef value = PXMobileGestaltSpoofValue(property);
+        NSString *key = property ? (__bridge NSString *)property : @"";
+        if (value) {
+            if (error) *error = 0;
+            PXRecordHookCall(@"MobileGestaltWithError", key ?: @"", [(__bridge id)value description] ?: @"", YES, YES);
+            return value;
+        }
+        PXRecordHookCall(@"MobileGestaltWithError", key ?: @"", @"", NO, NO);
+    }
+    return orig_MGCopyAnswerWithError ? orig_MGCopyAnswerWithError(property, error) : NULL;
+}
+
+static uintptr_t PXSlideForHeader(const struct mach_header_64 *header) {
+    uint32_t count = _dyld_image_count();
+    for (uint32_t i = 0; i < count; i++) {
+        if ((const struct mach_header_64 *)_dyld_get_image_header(i) == header) {
+            return (uintptr_t)_dyld_get_image_vmaddr_slide(i);
+        }
+    }
+    return 0;
+}
+
+static void PXRebindSymbolInImage(const struct mach_header_64 *header, const char *symbolName, const void *replacement, void **originalOut) {
+    if (!header || header->magic != MH_MAGIC_64 || !symbolName || !replacement) return;
+
+    uintptr_t slide = PXSlideForHeader(header);
+    const struct load_command *cmd = (const struct load_command *)((const uint8_t *)header + sizeof(struct mach_header_64));
+    const struct segment_command_64 *linkedit = NULL;
+    const struct symtab_command *symtab = NULL;
+    const struct dysymtab_command *dysymtab = NULL;
+
+    for (uint32_t i = 0; i < header->ncmds; i++) {
+        if (cmd->cmd == LC_SEGMENT_64) {
+            const struct segment_command_64 *seg = (const struct segment_command_64 *)cmd;
+            if (strcmp(seg->segname, SEG_LINKEDIT) == 0) linkedit = seg;
+        } else if (cmd->cmd == LC_SYMTAB) {
+            symtab = (const struct symtab_command *)cmd;
+        } else if (cmd->cmd == LC_DYSYMTAB) {
+            dysymtab = (const struct dysymtab_command *)cmd;
+        }
+        cmd = (const struct load_command *)((const uint8_t *)cmd + cmd->cmdsize);
+    }
+    if (!linkedit || !symtab || !dysymtab) return;
+
+    uintptr_t linkeditBase = slide + linkedit->vmaddr - linkedit->fileoff;
+    const struct nlist_64 *symbols = (const struct nlist_64 *)(linkeditBase + symtab->symoff);
+    const char *strings = (const char *)(linkeditBase + symtab->stroff);
+    const uint32_t *indirectSymbols = (const uint32_t *)(linkeditBase + dysymtab->indirectsymoff);
+
+    cmd = (const struct load_command *)((const uint8_t *)header + sizeof(struct mach_header_64));
+    for (uint32_t i = 0; i < header->ncmds; i++) {
+        if (cmd->cmd == LC_SEGMENT_64) {
+            const struct segment_command_64 *seg = (const struct segment_command_64 *)cmd;
+            const struct section_64 *section = (const struct section_64 *)((const uint8_t *)seg + sizeof(struct segment_command_64));
+            for (uint32_t j = 0; j < seg->nsects; j++) {
+                uint32_t sectionType = section[j].flags & SECTION_TYPE;
+                if (sectionType != S_LAZY_SYMBOL_POINTERS && sectionType != S_NON_LAZY_SYMBOL_POINTERS) continue;
+                uint32_t indirectIndex = section[j].reserved1;
+                uint32_t pointerCount = (uint32_t)(section[j].size / sizeof(void *));
+                void **pointers = (void **)(slide + section[j].addr);
+                for (uint32_t k = 0; k < pointerCount; k++) {
+                    uint32_t symIndex = indirectSymbols[indirectIndex + k];
+                    if (symIndex == INDIRECT_SYMBOL_ABS || symIndex == INDIRECT_SYMBOL_LOCAL || symIndex == (INDIRECT_SYMBOL_ABS | INDIRECT_SYMBOL_LOCAL)) continue;
+                    const char *name = strings + symbols[symIndex].n_un.n_strx;
+                    if (!name || strcmp(name, symbolName) != 0) continue;
+                    if (originalOut && !*originalOut) *originalOut = pointers[k];
+                    vm_address_t page = (vm_address_t)((uintptr_t)&pointers[k] & ~(uintptr_t)(vm_page_size - 1));
+                    vm_protect(mach_task_self(), page, vm_page_size, false, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+                    pointers[k] = (void *)replacement;
+                    PXRecordHookCall(@"rebind", [NSString stringWithUTF8String:symbolName] ?: @"", @"patched", YES, YES);
+                }
+            }
+        }
+        cmd = (const struct load_command *)((const uint8_t *)cmd + cmd->cmdsize);
+    }
+}
+
+static void PXRebindMobileGestalt(void) {
+    NSString *bundlePath = PXNormalizePath([[NSBundle mainBundle] bundlePath]);
+    uint32_t count = _dyld_image_count();
+    for (uint32_t i = 0; i < count; i++) {
+        const char *imageName = _dyld_get_image_name(i);
+        NSString *path = imageName ? PXNormalizePath([NSString stringWithUTF8String:imageName]) : @"";
+        if (bundlePath.length && ![path hasPrefix:bundlePath]) continue;
+        const struct mach_header_64 *header = (const struct mach_header_64 *)_dyld_get_image_header(i);
+        PXRebindSymbolInImage(header, "_MGCopyAnswer", (const void *)px_MGCopyAnswer, (void **)&orig_MGCopyAnswer);
+        PXRebindSymbolInImage(header, "_MGCopyAnswerWithError", (const void *)px_MGCopyAnswerWithError, (void **)&orig_MGCopyAnswerWithError);
+    }
+}
 
 static int PXCallOrigSysctlByName(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
     if (!orig_sysctlbyname) orig_sysctlbyname = dlsym(RTLD_NEXT, "sysctlbyname");
@@ -364,13 +518,21 @@ static void PXInstallCHooks(void) {
     orig_sysctlbyname = dlsym(RTLD_NEXT, "sysctlbyname");
     orig_MGCopyAnswer = dlsym(RTLD_NEXT, "MGCopyAnswer");
     if (!orig_MGCopyAnswer) orig_MGCopyAnswer = dlsym(RTLD_DEFAULT, "MGCopyAnswer");
+    orig_MGCopyAnswerWithError = dlsym(RTLD_NEXT, "MGCopyAnswerWithError");
+    if (!orig_MGCopyAnswerWithError) orig_MGCopyAnswerWithError = dlsym(RTLD_DEFAULT, "MGCopyAnswerWithError");
     gEnableSysctlByNameHook = PXSnapshotBool(@"EnableSysctlByNameHook", YES);
+    gEnableMobileGestaltHook = PXSnapshotBool(@"EnableMobileGestaltHook", NO);
     gCHooksReady = YES;
-    PXInjectLog(@"C hooks enabled mode=%@ sysctlbyname=%p enabled=%@ MGCopyAnswer=%p MGCopyAnswerInterpose=disabled",
+    if (gEnableMobileGestaltHook) {
+        PXRebindMobileGestalt();
+    }
+    PXInjectLog(@"C hooks enabled mode=%@ sysctlbyname=%p enabled=%@ MGCopyAnswer=%p MGCopyAnswerWithError=%p MobileGestalt enabled=%@",
                 PXSnapshotString(@"CHookTestMode") ?: @"",
                 orig_sysctlbyname,
                 gEnableSysctlByNameHook ? @"YES" : @"NO",
-                orig_MGCopyAnswer);
+                orig_MGCopyAnswer,
+                orig_MGCopyAnswerWithError,
+                gEnableMobileGestaltHook ? @"YES" : @"NO");
 }
 
 __attribute__((constructor))

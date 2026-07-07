@@ -261,6 +261,7 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
                                                               enableCHooks:YES
                                                               cHookOptions:@{@"CHookTestMode": @"sysctlbyname-safe",
                                                                              @"EnableSysctlByNameHook": @YES,
+                                                                             @"EnableMobileGestaltHook": @YES,
                                                                              @"EnableSysctlName_hw.machine": @YES,
                                                                              @"EnableSysctlName_hw.model": @YES,
                                                                              @"EnableSysctlName_kern.osversion": @YES,
