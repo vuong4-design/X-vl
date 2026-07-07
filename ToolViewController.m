@@ -615,6 +615,14 @@
             });
         });
     }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Enable Device Metrics Hook" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSDictionary *result = [PXDiagnostics enableDeviceMetricsHookSnapshotForBundleID:@"com.finalwire.aida64"];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                showResult(@"Enable Metrics Hook", result);
+            });
+        });
+    }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"C Hook Value Tests" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         typeof(weakSelf) selfRef = weakSelf;
         if (!selfRef) return;

@@ -264,6 +264,7 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
                                                                              @"EnableSysctlHook": @YES,
                                                                              @"EnableUnameHook": @YES,
                                                                              @"EnableDlsymHook": @NO,
+                                                                             @"EnableDeviceMetricsHook": @NO,
                                                                              @"EnableMobileGestaltHook": @YES,
                                                                              @"EnableSysctlName_hw.machine": @YES,
                                                                              @"EnableSysctlName_hw.model": @YES,
@@ -280,6 +281,7 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     info[@"EnableSysctlHook"] = snapshot[@"EnableSysctlHook"] ?: @"";
     info[@"EnableUnameHook"] = snapshot[@"EnableUnameHook"] ?: @"";
     info[@"EnableDlsymHook"] = snapshot[@"EnableDlsymHook"] ?: @"";
+    info[@"EnableDeviceMetricsHook"] = snapshot[@"EnableDeviceMetricsHook"] ?: @"";
     info[@"note"] = @"ObjC, safe sysctlbyname, and bundle-local sysctl/uname rebind will be active on next target launch. Dlsym is diagnostic-only. Reopen the target app, then check Injection Marker Status.";
     [self log:@"[inject] c hooks snapshot status=%@", info];
     return info;
@@ -297,6 +299,7 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
                                                                              @"EnableSysctlHook": @YES,
                                                                              @"EnableUnameHook": @YES,
                                                                              @"EnableDlsymHook": @YES,
+                                                                             @"EnableDeviceMetricsHook": @NO,
                                                                              @"EnableMobileGestaltHook": @YES,
                                                                              @"EnableSysctlName_hw.machine": @YES,
                                                                              @"EnableSysctlName_hw.model": @YES,
@@ -313,8 +316,44 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     info[@"EnableSysctlHook"] = snapshot[@"EnableSysctlHook"] ?: @"";
     info[@"EnableUnameHook"] = snapshot[@"EnableUnameHook"] ?: @"";
     info[@"EnableDlsymHook"] = snapshot[@"EnableDlsymHook"] ?: @"";
+    info[@"EnableDeviceMetricsHook"] = snapshot[@"EnableDeviceMetricsHook"] ?: @"";
     info[@"note"] = @"Dlsym diagnostic hook will be active on next target launch. Use only if model spoofing regresses or MobileGestalt/dynamic lookup needs investigation.";
     [self log:@"[inject] dlsym hook snapshot status=%@", info];
+    return info;
+}
+
++ (NSDictionary<NSString *,id> *)enableDeviceMetricsHookSnapshotForBundleID:(NSString *)bundleID {
+    NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
+    [self log:@"[inject] enabling device metrics hook snapshot bundleID=%@", targetBundleID];
+    NSError *err = nil;
+    NSDictionary *snapshot = [PXRuntimeSnapshot exportSnapshotForBundleID:targetBundleID
+                                                           enableObjCHooks:YES
+                                                              enableCHooks:YES
+                                                              cHookOptions:@{@"CHookTestMode": @"device-metrics-diagnostic",
+                                                                             @"EnableSysctlByNameHook": @YES,
+                                                                             @"EnableSysctlHook": @YES,
+                                                                             @"EnableUnameHook": @YES,
+                                                                             @"EnableDlsymHook": @NO,
+                                                                             @"EnableDeviceMetricsHook": @YES,
+                                                                             @"EnableMobileGestaltHook": @YES,
+                                                                             @"EnableSysctlName_hw.machine": @YES,
+                                                                             @"EnableSysctlName_hw.model": @YES,
+                                                                             @"EnableSysctlName_kern.osversion": @YES,
+                                                                             @"EnableSysctlName_kern.version": @YES}
+                                                                     error:&err];
+    NSDictionary *status = [PXRuntimeSnapshot statusForBundleID:targetBundleID];
+    NSMutableDictionary *info = [NSMutableDictionary dictionaryWithDictionary:status ?: @{}];
+    info[@"exportOK"] = snapshot ? @"YES" : @"NO";
+    info[@"exportError"] = err.localizedDescription ?: @"";
+    info[@"EnableObjCHooks"] = snapshot[@"EnableObjCHooks"] ?: @"";
+    info[@"EnableCHooks"] = snapshot[@"EnableCHooks"] ?: @"";
+    info[@"CHookTestMode"] = snapshot[@"CHookTestMode"] ?: @"";
+    info[@"EnableSysctlHook"] = snapshot[@"EnableSysctlHook"] ?: @"";
+    info[@"EnableUnameHook"] = snapshot[@"EnableUnameHook"] ?: @"";
+    info[@"EnableDlsymHook"] = snapshot[@"EnableDlsymHook"] ?: @"";
+    info[@"EnableDeviceMetricsHook"] = snapshot[@"EnableDeviceMetricsHook"] ?: @"";
+    info[@"note"] = @"Device metrics hooks will be active on next target launch for CPU cores, memory, and screen metrics. Reopen AIDA64, visit device/display pages, then check Injection Marker Status.";
+    [self log:@"[inject] device metrics hook snapshot status=%@", info];
     return info;
 }
 

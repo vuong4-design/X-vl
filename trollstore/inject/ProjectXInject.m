@@ -24,6 +24,7 @@ static BOOL gEnableSysctlByNameHook = NO;
 static BOOL gEnableSysctlHook = NO;
 static BOOL gEnableUnameHook = NO;
 static BOOL gEnableDlsymHook = NO;
+static BOOL gEnableDeviceMetricsHook = NO;
 static BOOL gEnableMobileGestaltHook = NO;
 static NSMutableDictionary *gHookStats = nil;
 static __thread BOOL gRecordingStats = NO;
@@ -135,6 +136,31 @@ static NSString *PXValueForSysctlMIB(const int *name, u_int namelen, NSString **
 
     if (nameOut) *nameOut = sysctlName;
     return value;
+}
+
+static CGSize PXSnapshotSize(NSString *key) {
+    NSString *value = PXSnapshotString(key);
+    if (!value.length) return CGSizeZero;
+    NSArray<NSString *> *parts = [value componentsSeparatedByString:@"x"];
+    if (parts.count != 2) parts = [value componentsSeparatedByString:@"X"];
+    if (parts.count != 2) return CGSizeZero;
+    CGFloat width = parts[0].doubleValue;
+    CGFloat height = parts[1].doubleValue;
+    return (width > 0 && height > 0) ? CGSizeMake(width, height) : CGSizeZero;
+}
+
+static double PXSnapshotDouble(NSString *key) {
+    id value = PXSnapshotObject(key);
+    if ([value isKindOfClass:[NSNumber class]]) return [(NSNumber *)value doubleValue];
+    if ([value isKindOfClass:[NSString class]]) return [(NSString *)value doubleValue];
+    return 0;
+}
+
+static NSUInteger PXSnapshotUnsignedInteger(NSString *key) {
+    id value = PXSnapshotObject(key);
+    if ([value isKindOfClass:[NSNumber class]]) return [(NSNumber *)value unsignedIntegerValue];
+    if ([value isKindOfClass:[NSString class]]) return (NSUInteger)[(NSString *)value longLongValue];
+    return 0;
 }
 
 static NSString *PXSafeBundleID(void) {
@@ -297,6 +323,7 @@ static void PXWriteLoadedMarker(void) {
         @"EnableSysctlHook": @(PXSnapshotBool(@"EnableSysctlHook", NO)),
         @"EnableUnameHook": @(PXSnapshotBool(@"EnableUnameHook", NO)),
         @"EnableDlsymHook": @(PXSnapshotBool(@"EnableDlsymHook", NO)),
+        @"EnableDeviceMetricsHook": @(PXSnapshotBool(@"EnableDeviceMetricsHook", NO)),
         @"EnableMobileGestaltHook": @(PXSnapshotBool(@"EnableMobileGestaltHook", NO)),
         @"processID": @([[NSProcessInfo processInfo] processIdentifier]),
         @"hookStatsPath": PXLocalHookStatsPath(),
@@ -325,6 +352,13 @@ static NSString *(*orig_UIDevice_systemVersion)(id, SEL) = NULL;
 static NSUUID *(*orig_UIDevice_identifierForVendor)(id, SEL) = NULL;
 static NSString *(*orig_NSProcessInfo_operatingSystemVersionString)(id, SEL) = NULL;
 static NSOperatingSystemVersion (*orig_NSProcessInfo_operatingSystemVersion)(id, SEL) = NULL;
+static NSUInteger (*orig_NSProcessInfo_processorCount)(id, SEL) = NULL;
+static NSUInteger (*orig_NSProcessInfo_activeProcessorCount)(id, SEL) = NULL;
+static unsigned long long (*orig_NSProcessInfo_physicalMemory)(id, SEL) = NULL;
+static CGRect (*orig_UIScreen_bounds)(id, SEL) = NULL;
+static CGRect (*orig_UIScreen_nativeBounds)(id, SEL) = NULL;
+static CGFloat (*orig_UIScreen_scale)(id, SEL) = NULL;
+static CGFloat (*orig_UIScreen_nativeScale)(id, SEL) = NULL;
 
 static NSString *px_UIDevice_name(id self, SEL _cmd) {
     NSString *value = PXSnapshotString(@"DeviceName");
@@ -379,6 +413,57 @@ static NSOperatingSystemVersion px_NSProcessInfo_operatingSystemVersion(id self,
     return orig_NSProcessInfo_operatingSystemVersion ? orig_NSProcessInfo_operatingSystemVersion(self, _cmd) : version;
 }
 
+static NSUInteger px_NSProcessInfo_processorCount(id self, SEL _cmd) {
+    NSUInteger value = gEnableDeviceMetricsHook ? PXSnapshotUnsignedInteger(@"CPUCoreCount") : 0;
+    PXRecordHookCall(@"metrics", @"NSProcessInfo.processorCount", value ? [@(value) stringValue] : @"", value > 0, value > 0);
+    return value > 0 ? value : (orig_NSProcessInfo_processorCount ? orig_NSProcessInfo_processorCount(self, _cmd) : 1);
+}
+
+static NSUInteger px_NSProcessInfo_activeProcessorCount(id self, SEL _cmd) {
+    NSUInteger value = gEnableDeviceMetricsHook ? PXSnapshotUnsignedInteger(@"CPUCoreCount") : 0;
+    PXRecordHookCall(@"metrics", @"NSProcessInfo.activeProcessorCount", value ? [@(value) stringValue] : @"", value > 0, value > 0);
+    return value > 0 ? value : (orig_NSProcessInfo_activeProcessorCount ? orig_NSProcessInfo_activeProcessorCount(self, _cmd) : 1);
+}
+
+static unsigned long long px_NSProcessInfo_physicalMemory(id self, SEL _cmd) {
+    NSUInteger gb = gEnableDeviceMetricsHook ? PXSnapshotUnsignedInteger(@"DeviceMemory") : 0;
+    unsigned long long value = gb > 0 ? (unsigned long long)gb * 1024ULL * 1024ULL * 1024ULL : 0;
+    PXRecordHookCall(@"metrics", @"NSProcessInfo.physicalMemory", value ? [@(value) stringValue] : @"", value > 0, value > 0);
+    return value > 0 ? value : (orig_NSProcessInfo_physicalMemory ? orig_NSProcessInfo_physicalMemory(self, _cmd) : 0);
+}
+
+static CGRect px_UIScreen_bounds(id self, SEL _cmd) {
+    CGSize viewport = gEnableDeviceMetricsHook ? PXSnapshotSize(@"ViewportResolution") : CGSizeZero;
+    if (viewport.width > 0 && viewport.height > 0) {
+        CGRect rect = CGRectMake(0, 0, viewport.width, viewport.height);
+        PXRecordHookCall(@"metrics", @"UIScreen.bounds", NSStringFromCGSize(viewport), YES, YES);
+        return rect;
+    }
+    return orig_UIScreen_bounds ? orig_UIScreen_bounds(self, _cmd) : CGRectZero;
+}
+
+static CGRect px_UIScreen_nativeBounds(id self, SEL _cmd) {
+    CGSize screen = gEnableDeviceMetricsHook ? PXSnapshotSize(@"ScreenResolution") : CGSizeZero;
+    if (screen.width > 0 && screen.height > 0) {
+        CGRect rect = CGRectMake(0, 0, screen.width, screen.height);
+        PXRecordHookCall(@"metrics", @"UIScreen.nativeBounds", NSStringFromCGSize(screen), YES, YES);
+        return rect;
+    }
+    return orig_UIScreen_nativeBounds ? orig_UIScreen_nativeBounds(self, _cmd) : CGRectZero;
+}
+
+static CGFloat px_UIScreen_scale(id self, SEL _cmd) {
+    double value = gEnableDeviceMetricsHook ? PXSnapshotDouble(@"DevicePixelRatio") : 0;
+    PXRecordHookCall(@"metrics", @"UIScreen.scale", value > 0 ? [@(value) stringValue] : @"", value > 0, value > 0);
+    return value > 0 ? (CGFloat)value : (orig_UIScreen_scale ? orig_UIScreen_scale(self, _cmd) : 1.0);
+}
+
+static CGFloat px_UIScreen_nativeScale(id self, SEL _cmd) {
+    double value = gEnableDeviceMetricsHook ? PXSnapshotDouble(@"DevicePixelRatio") : 0;
+    PXRecordHookCall(@"metrics", @"UIScreen.nativeScale", value > 0 ? [@(value) stringValue] : @"", value > 0, value > 0);
+    return value > 0 ? (CGFloat)value : (orig_UIScreen_nativeScale ? orig_UIScreen_nativeScale(self, _cmd) : 1.0);
+}
+
 static void PXInstallObjCHooks(void) {
     Class device = objc_getClass("UIDevice");
     PXReplaceInstanceMethod(device, @selector(name), (IMP)px_UIDevice_name, (IMP *)&orig_UIDevice_name);
@@ -391,6 +476,18 @@ static void PXInstallObjCHooks(void) {
     Class processInfo = objc_getClass("NSProcessInfo");
     PXReplaceInstanceMethod(processInfo, @selector(operatingSystemVersionString), (IMP)px_NSProcessInfo_operatingSystemVersionString, (IMP *)&orig_NSProcessInfo_operatingSystemVersionString);
     PXReplaceInstanceMethod(processInfo, @selector(operatingSystemVersion), (IMP)px_NSProcessInfo_operatingSystemVersion, (IMP *)&orig_NSProcessInfo_operatingSystemVersion);
+
+    if (gEnableDeviceMetricsHook) {
+        PXReplaceInstanceMethod(processInfo, @selector(processorCount), (IMP)px_NSProcessInfo_processorCount, (IMP *)&orig_NSProcessInfo_processorCount);
+        PXReplaceInstanceMethod(processInfo, @selector(activeProcessorCount), (IMP)px_NSProcessInfo_activeProcessorCount, (IMP *)&orig_NSProcessInfo_activeProcessorCount);
+        PXReplaceInstanceMethod(processInfo, @selector(physicalMemory), (IMP)px_NSProcessInfo_physicalMemory, (IMP *)&orig_NSProcessInfo_physicalMemory);
+
+        Class screen = objc_getClass("UIScreen");
+        PXReplaceInstanceMethod(screen, @selector(bounds), (IMP)px_UIScreen_bounds, (IMP *)&orig_UIScreen_bounds);
+        PXReplaceInstanceMethod(screen, @selector(nativeBounds), (IMP)px_UIScreen_nativeBounds, (IMP *)&orig_UIScreen_nativeBounds);
+        PXReplaceInstanceMethod(screen, @selector(scale), (IMP)px_UIScreen_scale, (IMP *)&orig_UIScreen_scale);
+        PXReplaceInstanceMethod(screen, @selector(nativeScale), (IMP)px_UIScreen_nativeScale, (IMP *)&orig_UIScreen_nativeScale);
+    }
 }
 
 static int (*orig_sysctlbyname)(const char *, void *, size_t *, void *, size_t) = NULL;
@@ -700,6 +797,7 @@ static void PXInstallCHooks(void) {
     gEnableSysctlHook = PXSnapshotBool(@"EnableSysctlHook", NO);
     gEnableUnameHook = PXSnapshotBool(@"EnableUnameHook", NO);
     gEnableDlsymHook = PXSnapshotBool(@"EnableDlsymHook", NO);
+    gEnableDeviceMetricsHook = PXSnapshotBool(@"EnableDeviceMetricsHook", gEnableDeviceMetricsHook);
     gEnableMobileGestaltHook = PXSnapshotBool(@"EnableMobileGestaltHook", NO);
     gCHooksReady = YES;
     if (gEnableSysctlHook) {
@@ -714,7 +812,7 @@ static void PXInstallCHooks(void) {
     if (gEnableMobileGestaltHook) {
         PXRebindMobileGestalt();
     }
-    PXInjectLog(@"C hooks enabled mode=%@ sysctlbyname=%p enabled=%@ sysctl=%p enabled=%@ uname=%p enabled=%@ dlsym=%p enabled=%@ MGCopyAnswer=%p MGCopyAnswerWithError=%p MobileGestalt enabled=%@",
+    PXInjectLog(@"C hooks enabled mode=%@ sysctlbyname=%p enabled=%@ sysctl=%p enabled=%@ uname=%p enabled=%@ dlsym=%p enabled=%@ metrics=%@ MGCopyAnswer=%p MGCopyAnswerWithError=%p MobileGestalt enabled=%@",
                 PXSnapshotString(@"CHookTestMode") ?: @"",
                 orig_sysctlbyname,
                 gEnableSysctlByNameHook ? @"YES" : @"NO",
@@ -724,6 +822,7 @@ static void PXInstallCHooks(void) {
                 gEnableUnameHook ? @"YES" : @"NO",
                 orig_dlsym,
                 gEnableDlsymHook ? @"YES" : @"NO",
+                gEnableDeviceMetricsHook ? @"YES" : @"NO",
                 orig_MGCopyAnswer,
                 orig_MGCopyAnswerWithError,
                 gEnableMobileGestaltHook ? @"YES" : @"NO");
@@ -733,6 +832,7 @@ __attribute__((constructor))
 static void ProjectXInjectInit(void) {
     @autoreleasepool {
         PXLoadSnapshot();
+        gEnableDeviceMetricsHook = PXSnapshotBool(@"EnableDeviceMetricsHook", NO);
         PXWriteLoadedMarker();
         if (PXSnapshotBool(@"EnableObjCHooks", NO)) {
             PXInstallObjCHooks();
