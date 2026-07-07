@@ -56,6 +56,15 @@ static NSString *PXIPFilePermissions(NSString *path) {
     return perms ? [NSString stringWithFormat:@"%04o", perms.unsignedShortValue & 07777] : @"";
 }
 
+static NSDictionary<NSString *, id> *PXIPSafeSysctlByNameOptions(void) {
+    return @{@"CHookTestMode": @"sysctlbyname-safe",
+             @"EnableSysctlByNameHook": @YES,
+             @"EnableSysctlName_hw.machine": @YES,
+             @"EnableSysctlName_hw.model": @YES,
+             @"EnableSysctlName_kern.osversion": @YES,
+             @"EnableSysctlName_kern.version": @YES};
+}
+
 static void PXIPAddLoadCommandStatus(NSMutableDictionary *result, NSString *keyPrefix, NSString *path, NSString *dylibLoadPath) {
     BOOL exists = path.length && [[NSFileManager defaultManager] fileExistsAtPath:path];
     result[[keyPrefix stringByAppendingString:@"Exists"]] = exists ? @"YES" : @"NO";
@@ -735,9 +744,14 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         }
 
         NSError *snapshotErr = nil;
-        NSDictionary *snapshot = [PXRuntimeSnapshot exportSnapshotForBundleID:bundleID error:&snapshotErr];
+        NSDictionary *snapshot = [PXRuntimeSnapshot exportSnapshotForBundleID:bundleID
+                                                               enableObjCHooks:YES
+                                                                  enableCHooks:YES
+                                                                  cHookOptions:PXIPSafeSysctlByNameOptions()
+                                                                         error:&snapshotErr];
         result[@"snapshot"] = snapshot ?: @{};
         result[@"snapshotError"] = snapshotErr.localizedDescription ?: @"";
+        result[@"snapshotMode"] = snapshot[@"CHookTestMode"] ?: @"";
 
         NSString *backupDir = [[[PXIPBackupRoot() stringByAppendingPathComponent:PXIPSafeName(bundleID)] stringByAppendingPathComponent:[NSString stringWithFormat:@"%@-%@", version.length ? version : @"unknown", build.length ? build : @"unknown"]] stringByAppendingPathComponent:@"FrameworkCarriers"];
         NSString *safeCarrierName = PXIPSafeName(selected[@"relativePath"] ?: carrierPath.lastPathComponent ?: @"carrier");
