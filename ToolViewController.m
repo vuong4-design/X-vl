@@ -611,20 +611,14 @@
         typeof(weakSelf) selfRef = weakSelf;
         if (!selfRef) return;
         UIAlertController *tests = [UIAlertController alertControllerWithTitle:@"C Hook Value Tests"
-                                                                       message:@"Enable one isolated test mode, reopen AIDA64 once, then check Injection Marker Status."
+                                                                       message:@"Enable one isolated sysctlbyname value, reopen AIDA64 once, then check Injection Marker Status. sysctl/uname interpose is disabled because it exits AIDA64 at carrier load."
                                                                 preferredStyle:UIAlertControllerStyleActionSheet];
         NSArray<NSDictionary<NSString *, NSString *> *> *modes = @[
-            @{@"title": @"Interpose only", @"mode": @"interpose-only"},
             @{@"title": @"Safe sysctlbyname all", @"mode": @"sysctlbyname-safe"},
             @{@"title": @"sysctlbyname hw.machine", @"mode": @"sysctlbyname-hw.machine"},
             @{@"title": @"sysctlbyname hw.model", @"mode": @"sysctlbyname-hw.model"},
             @{@"title": @"sysctlbyname kern.osversion", @"mode": @"sysctlbyname-kern.osversion"},
             @{@"title": @"sysctlbyname kern.version", @"mode": @"sysctlbyname-kern.version"},
-            @{@"title": @"sysctl MIB hw.machine", @"mode": @"sysctl-hw.machine"},
-            @{@"title": @"sysctl MIB hw.model", @"mode": @"sysctl-hw.model"},
-            @{@"title": @"sysctl MIB kern.osversion", @"mode": @"sysctl-kern.osversion"},
-            @{@"title": @"sysctl MIB kern.version", @"mode": @"sysctl-kern.version"},
-            @{@"title": @"uname machine", @"mode": @"uname-machine"},
         ];
         for (NSDictionary<NSString *, NSString *> *entry in modes) {
             NSString *title = entry[@"title"] ?: @"Test";

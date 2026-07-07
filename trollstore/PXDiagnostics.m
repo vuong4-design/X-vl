@@ -261,8 +261,6 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
                                                               enableCHooks:YES
                                                               cHookOptions:@{@"CHookTestMode": @"sysctlbyname-safe",
                                                                              @"EnableSysctlByNameHook": @YES,
-                                                                             @"EnableSysctlHook": @NO,
-                                                                             @"EnableUnameHook": @NO,
                                                                              @"EnableSysctlName_hw.machine": @YES,
                                                                              @"EnableSysctlName_hw.model": @YES,
                                                                              @"EnableSysctlName_kern.osversion": @YES,
@@ -286,17 +284,13 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     NSMutableDictionary *options = [@{
         @"CHookTestMode": testMode,
         @"EnableSysctlByNameHook": @NO,
-        @"EnableSysctlHook": @NO,
-        @"EnableUnameHook": @NO,
         @"EnableSysctlName_hw.machine": @NO,
         @"EnableSysctlName_hw.model": @NO,
         @"EnableSysctlName_kern.osversion": @NO,
         @"EnableSysctlName_kern.version": @NO
     } mutableCopy];
 
-    if ([testMode isEqualToString:@"interpose-only"]) {
-        options[@"EnableCHooks"] = @YES;
-    } else if ([testMode isEqualToString:@"sysctlbyname-safe"]) {
+    if ([testMode isEqualToString:@"sysctlbyname-safe"]) {
         options[@"EnableSysctlByNameHook"] = @YES;
         options[@"EnableSysctlName_hw.machine"] = @YES;
         options[@"EnableSysctlName_hw.model"] = @YES;
@@ -314,21 +308,6 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     } else if ([testMode isEqualToString:@"sysctlbyname-kern.version"]) {
         options[@"EnableSysctlByNameHook"] = @YES;
         options[@"EnableSysctlName_kern.version"] = @YES;
-    } else if ([testMode isEqualToString:@"sysctl-hw.machine"]) {
-        options[@"EnableSysctlHook"] = @YES;
-        options[@"EnableSysctlName_hw.machine"] = @YES;
-    } else if ([testMode isEqualToString:@"sysctl-hw.model"]) {
-        options[@"EnableSysctlHook"] = @YES;
-        options[@"EnableSysctlName_hw.model"] = @YES;
-    } else if ([testMode isEqualToString:@"sysctl-kern.osversion"]) {
-        options[@"EnableSysctlHook"] = @YES;
-        options[@"EnableSysctlName_kern.osversion"] = @YES;
-    } else if ([testMode isEqualToString:@"sysctl-kern.version"]) {
-        options[@"EnableSysctlHook"] = @YES;
-        options[@"EnableSysctlName_kern.version"] = @YES;
-    } else if ([testMode isEqualToString:@"uname-machine"]) {
-        options[@"EnableUnameHook"] = @YES;
-        options[@"EnableSysctlName_hw.machine"] = @YES;
     }
 
     [self log:@"[inject] enabling c hook test snapshot bundleID=%@ mode=%@ options=%@", targetBundleID, testMode, options];
@@ -344,9 +323,7 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     info[@"exportError"] = err.localizedDescription ?: @"";
     info[@"CHookTestMode"] = snapshot[@"CHookTestMode"] ?: testMode;
     info[@"EnableSysctlByNameHook"] = snapshot[@"EnableSysctlByNameHook"] ?: @"";
-    info[@"EnableSysctlHook"] = snapshot[@"EnableSysctlHook"] ?: @"";
-    info[@"EnableUnameHook"] = snapshot[@"EnableUnameHook"] ?: @"";
-    info[@"note"] = @"Reopen AIDA64 once, then check Injection Marker Status. If AIDA64 exits, this mode is the suspect.";
+    info[@"note"] = @"Reopen AIDA64 once, then check Injection Marker Status. If AIDA64 exits, this sysctlbyname value is the suspect.";
     [self log:@"[inject] c hook test snapshot status=%@", info];
     return info;
 }
