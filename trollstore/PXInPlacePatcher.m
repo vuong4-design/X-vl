@@ -61,7 +61,7 @@ static NSDictionary<NSString *, id> *PXIPSafeSysctlByNameOptions(void) {
              @"EnableSysctlByNameHook": @YES,
              @"EnableSysctlHook": @YES,
              @"EnableUnameHook": @YES,
-             @"EnableDlsymHook": @YES,
+             @"EnableDlsymHook": @NO,
              @"EnableMobileGestaltHook": @YES,
              @"EnableSysctlName_hw.machine": @YES,
              @"EnableSysctlName_hw.model": @YES,

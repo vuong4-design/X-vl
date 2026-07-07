@@ -263,6 +263,39 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
                                                                              @"EnableSysctlByNameHook": @YES,
                                                                              @"EnableSysctlHook": @YES,
                                                                              @"EnableUnameHook": @YES,
+                                                                             @"EnableDlsymHook": @NO,
+                                                                             @"EnableMobileGestaltHook": @YES,
+                                                                             @"EnableSysctlName_hw.machine": @YES,
+                                                                             @"EnableSysctlName_hw.model": @YES,
+                                                                             @"EnableSysctlName_kern.osversion": @YES,
+                                                                             @"EnableSysctlName_kern.version": @YES}
+                                                                     error:&err];
+    NSDictionary *status = [PXRuntimeSnapshot statusForBundleID:targetBundleID];
+    NSMutableDictionary *info = [NSMutableDictionary dictionaryWithDictionary:status ?: @{}];
+    info[@"exportOK"] = snapshot ? @"YES" : @"NO";
+    info[@"exportError"] = err.localizedDescription ?: @"";
+    info[@"EnableObjCHooks"] = snapshot[@"EnableObjCHooks"] ?: @"";
+    info[@"EnableCHooks"] = snapshot[@"EnableCHooks"] ?: @"";
+    info[@"CHookTestMode"] = snapshot[@"CHookTestMode"] ?: @"";
+    info[@"EnableSysctlHook"] = snapshot[@"EnableSysctlHook"] ?: @"";
+    info[@"EnableUnameHook"] = snapshot[@"EnableUnameHook"] ?: @"";
+    info[@"EnableDlsymHook"] = snapshot[@"EnableDlsymHook"] ?: @"";
+    info[@"note"] = @"ObjC, safe sysctlbyname, and bundle-local sysctl/uname rebind will be active on next target launch. Dlsym is diagnostic-only. Reopen the target app, then check Injection Marker Status.";
+    [self log:@"[inject] c hooks snapshot status=%@", info];
+    return info;
+}
+
++ (NSDictionary<NSString *,id> *)enableDlsymHookSnapshotForBundleID:(NSString *)bundleID {
+    NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
+    [self log:@"[inject] enabling dlsym hook snapshot bundleID=%@", targetBundleID];
+    NSError *err = nil;
+    NSDictionary *snapshot = [PXRuntimeSnapshot exportSnapshotForBundleID:targetBundleID
+                                                           enableObjCHooks:YES
+                                                              enableCHooks:YES
+                                                              cHookOptions:@{@"CHookTestMode": @"dlsym-diagnostic",
+                                                                             @"EnableSysctlByNameHook": @YES,
+                                                                             @"EnableSysctlHook": @YES,
+                                                                             @"EnableUnameHook": @YES,
                                                                              @"EnableDlsymHook": @YES,
                                                                              @"EnableMobileGestaltHook": @YES,
                                                                              @"EnableSysctlName_hw.machine": @YES,
@@ -280,8 +313,8 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     info[@"EnableSysctlHook"] = snapshot[@"EnableSysctlHook"] ?: @"";
     info[@"EnableUnameHook"] = snapshot[@"EnableUnameHook"] ?: @"";
     info[@"EnableDlsymHook"] = snapshot[@"EnableDlsymHook"] ?: @"";
-    info[@"note"] = @"ObjC, safe sysctlbyname, bundle-local sysctl/uname rebind, and dlsym lookup hook will be active on next target launch. Reopen the target app, then check Injection Marker Status.";
-    [self log:@"[inject] c hooks snapshot status=%@", info];
+    info[@"note"] = @"Dlsym diagnostic hook will be active on next target launch. Use only if model spoofing regresses or MobileGestalt/dynamic lookup needs investigation.";
+    [self log:@"[inject] dlsym hook snapshot status=%@", info];
     return info;
 }
 
