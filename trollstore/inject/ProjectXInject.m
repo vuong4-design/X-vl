@@ -16,6 +16,7 @@ static NSDictionary *gSnapshot = nil;
 static NSString *gBundleID = nil;
 static BOOL gCHooksReady = NO;
 static BOOL gEnableSysctlByNameHook = NO;
+static NSMutableDictionary *gHookStats = nil;
 
 static id PXSnapshotObject(NSString *key) {
     id value = gSnapshot[key];
@@ -117,6 +118,10 @@ static NSString *PXLocalMarkerPath(void) {
     return [PXLocalProjectXDirectory() stringByAppendingPathComponent:@"loaded_marker.plist"];
 }
 
+static NSString *PXLocalHookStatsPath(void) {
+    return [PXLocalProjectXDirectory() stringByAppendingPathComponent:@"hook_stats.plist"];
+}
+
 static NSString *PXMarkerPathForBundleID(NSString *bundleID) {
     NSString *name = bundleID.length ? bundleID : @"unknown";
     return [[[PXInjectBaseDir stringByAppendingPathComponent:@"InjectionLogs"] stringByAppendingPathComponent:name] stringByAppendingPathExtension:@"loaded.plist"];
@@ -156,6 +161,53 @@ static void PXInjectLog(NSString *format, ...) {
     [fh closeFile];
 }
 
+static void PXRecordHookCall(NSString *category, NSString *name, NSString *value, BOOL spoofed, BOOL copied) {
+    if (!category.length || !name.length) return;
+    @autoreleasepool {
+        [[NSFileManager defaultManager] createDirectoryAtPath:PXLocalProjectXDirectory() withIntermediateDirectories:YES attributes:nil error:nil];
+        if (!gHookStats) {
+            gHookStats = [@{@"bundleID": gBundleID ?: @"",
+                            @"processName": [[NSProcessInfo processInfo] processName] ?: @"",
+                            @"processID": @([[NSProcessInfo processInfo] processIdentifier]),
+                            @"CHookTestMode": PXSnapshotString(@"CHookTestMode") ?: @"",
+                            @"createdAt": @([[NSDate date] timeIntervalSince1970]),
+                            @"totalCalls": @0,
+                            @"categories": [NSMutableDictionary dictionary]} mutableCopy];
+        }
+
+        NSUInteger total = [gHookStats[@"totalCalls"] unsignedIntegerValue] + 1;
+        gHookStats[@"totalCalls"] = @(total);
+        gHookStats[@"updatedAt"] = @([[NSDate date] timeIntervalSince1970]);
+        gHookStats[@"lastCategory"] = category;
+        gHookStats[@"lastName"] = name;
+
+        NSMutableDictionary *categories = gHookStats[@"categories"];
+        if (![categories isKindOfClass:[NSMutableDictionary class]]) {
+            categories = [NSMutableDictionary dictionary];
+            gHookStats[@"categories"] = categories;
+        }
+        NSMutableDictionary *entries = categories[category];
+        if (![entries isKindOfClass:[NSMutableDictionary class]]) {
+            entries = [NSMutableDictionary dictionary];
+            categories[category] = entries;
+        }
+        NSMutableDictionary *entry = entries[name];
+        if (![entry isKindOfClass:[NSMutableDictionary class]]) {
+            entry = [NSMutableDictionary dictionary];
+            entries[name] = entry;
+        }
+        entry[@"calls"] = @([entry[@"calls"] unsignedIntegerValue] + 1);
+        entry[@"spoofed"] = @([entry[@"spoofed"] unsignedIntegerValue] + (spoofed ? 1 : 0));
+        entry[@"copied"] = @([entry[@"copied"] unsignedIntegerValue] + (copied ? 1 : 0));
+        entry[@"lastValue"] = value ?: @"";
+        entry[@"lastAt"] = @([[NSDate date] timeIntervalSince1970]);
+
+        if (total <= 120 || total % 25 == 0) {
+            [gHookStats writeToFile:PXLocalHookStatsPath() atomically:YES];
+        }
+    }
+}
+
 static void PXLoadSnapshot(void) {
     gBundleID = PXSafeBundleID();
     NSString *localPath = PXLocalSnapshotPath();
@@ -186,6 +238,8 @@ static void PXWriteLoadedMarker(void) {
         @"EnableCHooks": @(PXSnapshotBool(@"EnableCHooks", NO)),
         @"CHookTestMode": PXSnapshotString(@"CHookTestMode") ?: @"",
         @"EnableSysctlByNameHook": @(PXSnapshotBool(@"EnableSysctlByNameHook", NO)),
+        @"processID": @([[NSProcessInfo processInfo] processIdentifier]),
+        @"hookStatsPath": PXLocalHookStatsPath(),
         @"snapshotPath": PXSnapshotPathForBundleID(gBundleID ?: @""),
     };
     [marker writeToFile:PXLocalMarkerPath() atomically:YES];
@@ -214,38 +268,45 @@ static NSOperatingSystemVersion (*orig_NSProcessInfo_operatingSystemVersion)(id,
 
 static NSString *px_UIDevice_name(id self, SEL _cmd) {
     NSString *value = PXSnapshotString(@"DeviceName");
+    PXRecordHookCall(@"objc", @"UIDevice.name", value ?: @"", value.length > 0, value.length > 0);
     return value ?: (orig_UIDevice_name ? orig_UIDevice_name(self, _cmd) : @"iPhone");
 }
 
 static NSString *px_UIDevice_model(id self, SEL _cmd) {
     NSString *value = PXSnapshotString(@"DeviceModelName") ?: PXSnapshotString(@"DeviceModel");
+    PXRecordHookCall(@"objc", @"UIDevice.model", value ?: @"", value.length > 0, value.length > 0);
     return value ?: (orig_UIDevice_model ? orig_UIDevice_model(self, _cmd) : @"iPhone");
 }
 
 static NSString *px_UIDevice_localizedModel(id self, SEL _cmd) {
     NSString *value = PXSnapshotString(@"DeviceModelName") ?: PXSnapshotString(@"DeviceModel");
+    PXRecordHookCall(@"objc", @"UIDevice.localizedModel", value ?: @"", value.length > 0, value.length > 0);
     return value ?: (orig_UIDevice_localizedModel ? orig_UIDevice_localizedModel(self, _cmd) : @"iPhone");
 }
 
 static NSString *px_UIDevice_systemName(id self, SEL _cmd) {
     NSString *value = PXSnapshotString(@"SystemName");
+    PXRecordHookCall(@"objc", @"UIDevice.systemName", value ?: @"", value.length > 0, value.length > 0);
     return value ?: (orig_UIDevice_systemName ? orig_UIDevice_systemName(self, _cmd) : @"iOS");
 }
 
 static NSString *px_UIDevice_systemVersion(id self, SEL _cmd) {
     NSString *value = PXSnapshotString(@"IOSVersion");
+    PXRecordHookCall(@"objc", @"UIDevice.systemVersion", value ?: @"", value.length > 0, value.length > 0);
     return value ?: (orig_UIDevice_systemVersion ? orig_UIDevice_systemVersion(self, _cmd) : @"");
 }
 
 static NSUUID *px_UIDevice_identifierForVendor(id self, SEL _cmd) {
     NSString *value = PXSnapshotString(@"IDFV");
     NSUUID *uuid = value.length ? [[NSUUID alloc] initWithUUIDString:value] : nil;
+    PXRecordHookCall(@"objc", @"UIDevice.identifierForVendor", value ?: @"", uuid != nil, uuid != nil);
     return uuid ?: (orig_UIDevice_identifierForVendor ? orig_UIDevice_identifierForVendor(self, _cmd) : nil);
 }
 
 static NSString *px_NSProcessInfo_operatingSystemVersionString(id self, SEL _cmd) {
     NSString *version = PXSnapshotString(@"IOSVersion");
     NSString *build = PXSnapshotString(@"IOSBuild");
+    PXRecordHookCall(@"objc", @"NSProcessInfo.operatingSystemVersionString", version ?: @"", version.length > 0, version.length > 0);
     if (version.length && build.length) return [NSString stringWithFormat:@"Version %@ (Build %@)", version, build];
     if (version.length) return [NSString stringWithFormat:@"Version %@", version];
     return orig_NSProcessInfo_operatingSystemVersionString ? orig_NSProcessInfo_operatingSystemVersionString(self, _cmd) : @"";
@@ -253,6 +314,7 @@ static NSString *px_NSProcessInfo_operatingSystemVersionString(id self, SEL _cmd
 
 static NSOperatingSystemVersion px_NSProcessInfo_operatingSystemVersion(id self, SEL _cmd) {
     NSOperatingSystemVersion version = PXSnapshotOSVersion();
+    PXRecordHookCall(@"objc", @"NSProcessInfo.operatingSystemVersion", PXSnapshotString(@"IOSVersion") ?: @"", version.majorVersion > 0, version.majorVersion > 0);
     if (version.majorVersion > 0) return version;
     return orig_NSProcessInfo_operatingSystemVersion ? orig_NSProcessInfo_operatingSystemVersion(self, _cmd) : version;
 }
@@ -284,9 +346,11 @@ static int px_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *
         NSString *value = PXValueForSysctlName(name);
         if (value.length) {
             BOOL copied = PXCopyCStringToSysctlBuffer(value, oldp, oldlenp);
+            PXRecordHookCall(@"sysctlbyname", [NSString stringWithUTF8String:name] ?: @"", value, YES, copied);
             PXInjectLog(@"c-hook mode=%@ sysctlbyname %s -> %@ copied=%@", PXSnapshotString(@"CHookTestMode") ?: @"", name, value, copied ? @"YES" : @"NO");
             return copied ? 0 : -1;
         }
+        PXRecordHookCall(@"sysctlbyname", [NSString stringWithUTF8String:name] ?: @"", @"", NO, NO);
     }
     return PXCallOrigSysctlByName(name, oldp, oldlenp, newp, newlen);
 }

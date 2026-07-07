@@ -86,6 +86,11 @@ static NSString *PXRTTargetLocalMarkerPath(NSString *bundleID) {
     return dir.length ? [dir stringByAppendingPathComponent:@"loaded_marker.plist"] : nil;
 }
 
+static NSString *PXRTTargetLocalHookStatsPath(NSString *bundleID) {
+    NSString *dir = PXRTTargetLocalDirectory(bundleID);
+    return dir.length ? [dir stringByAppendingPathComponent:@"hook_stats.plist"] : nil;
+}
+
 @implementation PXRuntimeSnapshot
 
 + (NSString *)baseDirectory {
@@ -215,12 +220,14 @@ static NSString *PXRTTargetLocalMarkerPath(NSString *bundleID) {
     NSString *markerPath = [self loadedMarkerPathForBundleID:bundleID ?: @""];
     NSString *targetSnapshotPath = PXRTTargetLocalSnapshotPath(bundleID ?: @"") ?: @"";
     NSString *targetMarkerPath = PXRTTargetLocalMarkerPath(bundleID ?: @"") ?: @"";
+    NSString *targetHookStatsPath = PXRTTargetLocalHookStatsPath(bundleID ?: @"") ?: @"";
     NSString *dylibPath = [self bundledInjectDylibPath];
     NSFileManager *fm = [NSFileManager defaultManager];
     NSDictionary *snapshot = [NSDictionary dictionaryWithContentsOfFile:snapshotPath] ?: @{};
     NSDictionary *marker = [NSDictionary dictionaryWithContentsOfFile:markerPath] ?: @{};
     NSDictionary *targetSnapshot = [NSDictionary dictionaryWithContentsOfFile:targetSnapshotPath] ?: @{};
     NSDictionary *targetMarker = [NSDictionary dictionaryWithContentsOfFile:targetMarkerPath] ?: @{};
+    NSDictionary *targetHookStats = [NSDictionary dictionaryWithContentsOfFile:targetHookStatsPath] ?: @{};
     NSDictionary *dylibAttrs = [fm attributesOfItemAtPath:dylibPath error:nil] ?: @{};
     return @{
         @"bundleID": bundleID ?: @"",
@@ -239,6 +246,9 @@ static NSString *PXRTTargetLocalMarkerPath(NSString *bundleID) {
         @"targetMarkerPath": targetMarkerPath ?: @"",
         @"targetMarkerExists": [fm fileExistsAtPath:targetMarkerPath] ? @"YES" : @"NO",
         @"targetMarker": targetMarker,
+        @"targetHookStatsPath": targetHookStatsPath ?: @"",
+        @"targetHookStatsExists": [fm fileExistsAtPath:targetHookStatsPath] ? @"YES" : @"NO",
+        @"targetHookStats": targetHookStats,
     };
 }
 
