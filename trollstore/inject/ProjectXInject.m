@@ -106,6 +106,45 @@ static BOOL PXCopyCStringToSysctlBuffer(NSString *value, void *oldp, size_t *old
     return YES;
 }
 
+static BOOL PXCopyBytesToSysctlBuffer(const void *bytes, size_t length, void *oldp, size_t *oldlenp) {
+    if (!bytes || length == 0 || !oldlenp) return NO;
+    if (!oldp) {
+        *oldlenp = length;
+        return YES;
+    }
+    if (*oldlenp < length) {
+        *oldlenp = length;
+        errno = ENOMEM;
+        return NO;
+    }
+    memcpy(oldp, bytes, length);
+    *oldlenp = length;
+    return YES;
+}
+
+static BOOL PXCopyUInt32ToSysctlBuffer(uint32_t value, void *oldp, size_t *oldlenp) {
+    return PXCopyBytesToSysctlBuffer(&value, sizeof(value), oldp, oldlenp);
+}
+
+static BOOL PXCopyUInt64ToSysctlBuffer(uint64_t value, void *oldp, size_t *oldlenp) {
+    return PXCopyBytesToSysctlBuffer(&value, sizeof(value), oldp, oldlenp);
+}
+
+static NSString *PXMetricsValueForSysctlName(const char *name, BOOL *isUInt64Out) {
+    if (isUInt64Out) *isUInt64Out = NO;
+    if (!gEnableDeviceMetricsHook || !name) return nil;
+    if (strcmp(name, "hw.ncpu") == 0 || strcmp(name, "hw.activecpu") == 0) {
+        NSUInteger cores = PXSnapshotUnsignedInteger(@"CPUCoreCount");
+        return cores > 0 ? [@(cores) stringValue] : nil;
+    }
+    if (strcmp(name, "hw.memsize") == 0) {
+        NSUInteger gb = PXSnapshotUnsignedInteger(@"DeviceMemory");
+        if (isUInt64Out) *isUInt64Out = YES;
+        return gb > 0 ? [@((uint64_t)gb * 1024ULL * 1024ULL * 1024ULL) stringValue] : nil;
+    }
+    return nil;
+}
+
 static NSString *PXValueForSysctlName(const char *name) {
     if (!name) return nil;
     if (strcmp(name, "hw.machine") == 0 && PXSysctlNameEnabled(@"hw.machine")) return PXSnapshotString(@"DeviceModel");
@@ -132,6 +171,24 @@ static NSString *PXValueForSysctlMIB(const int *name, u_int namelen, NSString **
     } else if (name[0] == CTL_KERN && name[1] == KERN_VERSION) {
         sysctlName = @"kern.version";
         value = PXSysctlNameEnabled(sysctlName) ? PXSnapshotString(@"KernelVersion") : nil;
+#ifdef HW_NCPU
+    } else if (gEnableDeviceMetricsHook && name[0] == CTL_HW && name[1] == HW_NCPU) {
+        sysctlName = @"hw.ncpu";
+        NSUInteger cores = PXSnapshotUnsignedInteger(@"CPUCoreCount");
+        value = cores > 0 ? [@(cores) stringValue] : nil;
+#endif
+#ifdef HW_ACTIVECPU
+    } else if (gEnableDeviceMetricsHook && name[0] == CTL_HW && name[1] == HW_ACTIVECPU) {
+        sysctlName = @"hw.activecpu";
+        NSUInteger cores = PXSnapshotUnsignedInteger(@"CPUCoreCount");
+        value = cores > 0 ? [@(cores) stringValue] : nil;
+#endif
+#ifdef HW_MEMSIZE
+    } else if (gEnableDeviceMetricsHook && name[0] == CTL_HW && name[1] == HW_MEMSIZE) {
+        sysctlName = @"hw.memsize";
+        NSUInteger gb = PXSnapshotUnsignedInteger(@"DeviceMemory");
+        value = gb > 0 ? [@((uint64_t)gb * 1024ULL * 1024ULL * 1024ULL) stringValue] : nil;
+#endif
     }
 
     if (nameOut) *nameOut = sysctlName;
@@ -708,6 +765,19 @@ static void *PXCallOrigDlsym(void *handle, const char *symbol) {
 
 static int px_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
     if (gCHooksReady && gEnableSysctlByNameHook && name && !newp && newlen == 0) {
+        BOOL isUInt64 = NO;
+        NSString *metricsValue = PXMetricsValueForSysctlName(name, &isUInt64);
+        if (metricsValue.length) {
+            BOOL copied = NO;
+            if (isUInt64) {
+                copied = PXCopyUInt64ToSysctlBuffer((uint64_t)metricsValue.longLongValue, oldp, oldlenp);
+            } else {
+                copied = PXCopyUInt32ToSysctlBuffer((uint32_t)metricsValue.unsignedIntValue, oldp, oldlenp);
+            }
+            PXRecordHookCall(@"sysctlbyname-metrics", [NSString stringWithUTF8String:name] ?: @"", metricsValue, YES, copied);
+            PXInjectLog(@"c-hook mode=%@ sysctlbyname metrics %s -> %@ copied=%@", PXSnapshotString(@"CHookTestMode") ?: @"", name, metricsValue, copied ? @"YES" : @"NO");
+            return copied ? 0 : -1;
+        }
         NSString *value = PXValueForSysctlName(name);
         if (value.length) {
             BOOL copied = PXCopyCStringToSysctlBuffer(value, oldp, oldlenp);
@@ -726,7 +796,15 @@ static int px_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void
         NSString *value = PXValueForSysctlMIB(name, namelen, &sysctlName);
         if (sysctlName.length) {
             if (value.length) {
-                BOOL copied = PXCopyCStringToSysctlBuffer(value, oldp, oldlenp);
+                BOOL copied = NO;
+                BOOL metricsInteger = [sysctlName isEqualToString:@"hw.ncpu"] || [sysctlName isEqualToString:@"hw.activecpu"] || [sysctlName isEqualToString:@"hw.memsize"];
+                if ([sysctlName isEqualToString:@"hw.memsize"]) {
+                    copied = PXCopyUInt64ToSysctlBuffer((uint64_t)value.longLongValue, oldp, oldlenp);
+                } else if (metricsInteger) {
+                    copied = PXCopyUInt32ToSysctlBuffer((uint32_t)value.unsignedIntValue, oldp, oldlenp);
+                } else {
+                    copied = PXCopyCStringToSysctlBuffer(value, oldp, oldlenp);
+                }
                 PXRecordHookCall(@"sysctl", sysctlName, value, YES, copied);
                 PXInjectLog(@"c-hook mode=%@ sysctl %@ -> %@ copied=%@", PXSnapshotString(@"CHookTestMode") ?: @"", sysctlName, value, copied ? @"YES" : @"NO");
                 return copied ? 0 : -1;
