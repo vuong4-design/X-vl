@@ -10,6 +10,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)clearLog;
 + (void)log:(NSString *)format, ... NS_FORMAT_FUNCTION(1, 2);
 + (NSString *)readLogTailWithMaxBytes:(NSUInteger)maxBytes;
++ (NSDictionary<NSString *, id> *)resolveAppQuery:(NSString *)query;
 
 + (NSDictionary<NSString *, id> *)environmentSnapshot;
 + (NSDictionary<NSString *, id> *)entitlementsSnapshot;

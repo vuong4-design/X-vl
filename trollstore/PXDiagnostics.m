@@ -10,6 +10,7 @@
 #import "common/PXProcessKiller.h"
 
 #import <UIKit/UIKit.h>
+#import <objc/message.h>
 #import <sys/stat.h>
 
 static NSString *PXDiagDirectory(void) {
@@ -151,6 +152,71 @@ static void PXDiagAddSnapshotFlags(NSMutableDictionary *info, NSDictionary *snap
     }
     NSString *s = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     return s ?: @"(failed to decode diagnostic log)";
+}
+
++ (NSDictionary<NSString *,id> *)resolveAppQuery:(NSString *)query {
+    NSString *trimmed = [[query ?: @""] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSString *fallback = @"com.finalwire.aida64";
+    if (!trimmed.length) trimmed = fallback;
+    NSMutableArray *matches = [NSMutableArray array];
+
+    @try {
+        Class proxyCls = NSClassFromString(@"LSApplicationProxy");
+        SEL proxySel = NSSelectorFromString(@"applicationProxyForIdentifier:");
+        id direct = (proxyCls && [proxyCls respondsToSelector:proxySel]) ? ((id (*)(id, SEL, id))objc_msgSend)(proxyCls, proxySel, trimmed) : nil;
+        if (direct) {
+            NSString *bundleID = nil;
+            NSString *name = nil;
+            @try { bundleID = [direct valueForKey:@"bundleIdentifier"]; } @catch (__unused NSException *e) {}
+            @try { name = [direct valueForKey:@"localizedName"]; } @catch (__unused NSException *e) {}
+            if (bundleID.length) {
+                NSDictionary *result = @{@"query": trimmed, @"bundleID": bundleID, @"name": name ?: @"", @"matchType": @"bundle-id", @"matches": @[]};
+                [self log:@"[app] resolve query=%@ result=%@", trimmed, result];
+                return result;
+            }
+        }
+
+        Class wsCls = NSClassFromString(@"LSApplicationWorkspace");
+        id workspace = (wsCls && [wsCls respondsToSelector:@selector(defaultWorkspace)]) ? ((id (*)(id, SEL))objc_msgSend)(wsCls, @selector(defaultWorkspace)) : nil;
+        SEL allSel = NSSelectorFromString(@"allApplications");
+        NSArray *apps = (workspace && [workspace respondsToSelector:allSel]) ? ((id (*)(id, SEL))objc_msgSend)(workspace, allSel) : nil;
+        NSString *needle = trimmed.lowercaseString;
+        for (id app in apps) {
+            NSString *bundleID = nil;
+            NSString *name = nil;
+            @try { bundleID = [app valueForKey:@"bundleIdentifier"] ?: [app valueForKey:@"applicationIdentifier"]; } @catch (__unused NSException *e) {}
+            @try { name = [app valueForKey:@"localizedName"]; } @catch (__unused NSException *e) {}
+            NSString *bidLower = bundleID.lowercaseString ?: @"";
+            NSString *nameLower = name.lowercaseString ?: @"";
+            if (!bundleID.length) continue;
+            BOOL exactName = [nameLower isEqualToString:needle];
+            BOOL containsName = [nameLower containsString:needle];
+            BOOL containsBundle = [bidLower containsString:needle];
+            if (exactName || containsName || containsBundle) {
+                [matches addObject:@{@"bundleID": bundleID, @"name": name ?: @"", @"exactName": exactName ? @"YES" : @"NO"}];
+            }
+        }
+    } @catch (NSException *ex) {
+        NSDictionary *result = @{@"query": trimmed, @"bundleID": trimmed, @"name": @"", @"matchType": @"error-fallback", @"error": [NSString stringWithFormat:@"%@ %@", ex.name ?: @"", ex.reason ?: @""], @"matches": matches};
+        [self log:@"[app] resolve query exception result=%@", result];
+        return result;
+    }
+
+    NSDictionary *selected = nil;
+    for (NSDictionary *match in matches) {
+        if ([match[@"exactName"] isEqual:@"YES"]) {
+            selected = match;
+            break;
+        }
+    }
+    if (!selected) selected = matches.firstObject;
+    NSDictionary *result = @{@"query": trimmed,
+                             @"bundleID": selected[@"bundleID"] ?: trimmed,
+                             @"name": selected[@"name"] ?: @"",
+                             @"matchType": selected ? @"name-search" : @"query-fallback",
+                             @"matches": matches ?: @[]};
+    [self log:@"[app] resolve query=%@ result=%@", trimmed, result];
+    return result;
 }
 
 + (NSDictionary<NSString *,id> *)environmentSnapshot {

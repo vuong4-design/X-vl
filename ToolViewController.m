@@ -482,8 +482,12 @@
 
 #ifdef PROJECTX_TROLLSTORE
 - (void)px_showTrollStoreDiagnosticsMenu {
+    NSString *storedTarget = [[NSUserDefaults standardUserDefaults] stringForKey:@"ProjectXTrollDiagTargetQuery"] ?: @"com.finalwire.aida64";
+    NSDictionary *targetInfo = [PXDiagnostics resolveAppQuery:storedTarget];
+    NSString *targetBundleID = targetInfo[@"bundleID"] ?: @"com.finalwire.aida64";
+    NSString *targetName = targetInfo[@"name"] ?: @"";
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"TrollStore Diagnostics"
-                                                                   message:[NSString stringWithFormat:@"Log: %@", [PXDiagnostics logPath]]
+                                                                   message:[NSString stringWithFormat:@"Target: %@%@\nLog: %@", targetBundleID, targetName.length ? [NSString stringWithFormat:@" (%@)", targetName] : @"", [PXDiagnostics logPath]]
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
 
     __weak typeof(self) weakSelf = self;
@@ -501,6 +505,30 @@
         [selfRef presentViewController:out animated:YES completion:nil];
     };
 
+    [alert addAction:[UIAlertAction actionWithTitle:@"Select Target App" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        typeof(weakSelf) selfRef = weakSelf;
+        if (!selfRef) return;
+        UIAlertController *prompt = [UIAlertController alertControllerWithTitle:@"Select Target App"
+                                                                        message:@"Enter app name or bundle ID. Example: AIDA64 or com.finalwire.aida64."
+                                                                 preferredStyle:UIAlertControllerStyleAlert];
+        [prompt addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+            textField.placeholder = @"AIDA64 or com.finalwire.aida64";
+            textField.text = storedTarget ?: @"com.finalwire.aida64";
+            textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+            textField.autocorrectionType = UITextAutocorrectionTypeNo;
+        }];
+        [prompt addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+        [prompt addAction:[UIAlertAction actionWithTitle:@"Use Target" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action2) {
+            NSString *query = prompt.textFields.firstObject.text ?: @"com.finalwire.aida64";
+            NSDictionary *resolved = [PXDiagnostics resolveAppQuery:query];
+            NSString *bundleID = resolved[@"bundleID"] ?: query;
+            [[NSUserDefaults standardUserDefaults] setObject:bundleID forKey:@"ProjectXTrollDiagTargetQuery"];
+            [[NSUserDefaults standardUserDefaults] synchronize];
+            showResult(@"Selected Target", resolved);
+        }]];
+        [selfRef presentViewController:prompt animated:YES completion:nil];
+    }]];
+
     [alert addAction:[UIAlertAction actionWithTitle:@"Run Environment Check" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         showResult(@"Environment Check", [PXDiagnostics environmentSnapshot]);
     }]];
@@ -517,17 +545,17 @@
         typeof(weakSelf) selfRef = weakSelf;
         if (!selfRef) return;
         UIAlertController *prompt = [UIAlertController alertControllerWithTitle:@"Injection Snapshot"
-                                                                        message:@"Bundle ID to export. Default is AIDA64."
+                                                                        message:@"App name or bundle ID to export. Defaults to the selected target."
                                                                  preferredStyle:UIAlertControllerStyleAlert];
         [prompt addTextFieldWithConfigurationHandler:^(UITextField *textField) {
-            textField.placeholder = @"com.finalwire.aida64";
-            textField.text = @"com.finalwire.aida64";
+            textField.placeholder = @"App name or bundle ID";
+            textField.text = targetBundleID;
             textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
             textField.autocorrectionType = UITextAutocorrectionTypeNo;
         }];
         [prompt addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
         [prompt addAction:[UIAlertAction actionWithTitle:@"Export" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action2) {
-            NSString *bundleID = prompt.textFields.firstObject.text ?: @"com.finalwire.aida64";
+            NSString *bundleID = [PXDiagnostics resolveAppQuery:prompt.textFields.firstObject.text ?: targetBundleID][@"bundleID"] ?: targetBundleID;
             showResult(@"Injection Snapshot", [PXDiagnostics injectionSnapshotForBundleID:bundleID]);
         }]];
         [selfRef presentViewController:prompt animated:YES completion:nil];
@@ -539,14 +567,14 @@
                                                                         message:@"Experimental. The target app may fail to launch or ignore DYLD_INSERT_LIBRARIES."
                                                                  preferredStyle:UIAlertControllerStyleAlert];
         [prompt addTextFieldWithConfigurationHandler:^(UITextField *textField) {
-            textField.placeholder = @"com.finalwire.aida64";
-            textField.text = @"com.finalwire.aida64";
+            textField.placeholder = @"App name or bundle ID";
+            textField.text = targetBundleID;
             textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
             textField.autocorrectionType = UITextAutocorrectionTypeNo;
         }];
         [prompt addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
         [prompt addAction:[UIAlertAction actionWithTitle:@"Launch" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action2) {
-            NSString *bundleID = prompt.textFields.firstObject.text ?: @"com.finalwire.aida64";
+            NSString *bundleID = [PXDiagnostics resolveAppQuery:prompt.textFields.firstObject.text ?: targetBundleID][@"bundleID"] ?: targetBundleID;
             showResult(@"DYLD Launcher", [PXDiagnostics dyldLaunchBundleID:bundleID]);
         }]];
         [selfRef presentViewController:prompt animated:YES completion:nil];
@@ -558,14 +586,14 @@
                                                                         message:@"Backs up the executable and copies ProjectXInject.dylib into the target app. It does not patch load commands yet."
                                                                  preferredStyle:UIAlertControllerStyleAlert];
         [prompt addTextFieldWithConfigurationHandler:^(UITextField *textField) {
-            textField.placeholder = @"com.finalwire.aida64";
-            textField.text = @"com.finalwire.aida64";
+            textField.placeholder = @"App name or bundle ID";
+            textField.text = targetBundleID;
             textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
             textField.autocorrectionType = UITextAutocorrectionTypeNo;
         }];
         [prompt addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
         [prompt addAction:[UIAlertAction actionWithTitle:@"Prepare" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action2) {
-            NSString *bundleID = prompt.textFields.firstObject.text ?: @"com.finalwire.aida64";
+            NSString *bundleID = [PXDiagnostics resolveAppQuery:prompt.textFields.firstObject.text ?: targetBundleID][@"bundleID"] ?: targetBundleID;
             dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
                 NSDictionary *result = [PXDiagnostics prepareInPlaceBundleID:bundleID];
                 dispatch_async(dispatch_get_main_queue(), ^{
@@ -577,7 +605,7 @@
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"In-Place Status" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            NSDictionary *result = [PXDiagnostics inPlaceStatusBundleID:@"com.finalwire.aida64"];
+            NSDictionary *result = [PXDiagnostics inPlaceStatusBundleID:targetBundleID];
             dispatch_async(dispatch_get_main_queue(), ^{
                 showResult(@"In-Place Status", result);
             });
@@ -585,7 +613,7 @@
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Injection Marker Status" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            NSDictionary *result = [PXDiagnostics injectionMarkerStatusForBundleID:@"com.finalwire.aida64"];
+            NSDictionary *result = [PXDiagnostics injectionMarkerStatusForBundleID:targetBundleID];
             dispatch_async(dispatch_get_main_queue(), ^{
                 showResult(@"Injection Marker Status", result);
             });
@@ -593,7 +621,7 @@
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Apply Runtime Snapshot Only" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            NSDictionary *result = [PXDiagnostics applyRuntimeSnapshotOnlyForBundleID:@"com.finalwire.aida64"];
+            NSDictionary *result = [PXDiagnostics applyRuntimeSnapshotOnlyForBundleID:targetBundleID];
             dispatch_async(dispatch_get_main_queue(), ^{
                 showResult(@"Apply Runtime Snapshot", result);
             });
@@ -601,7 +629,7 @@
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Enable ObjC Hooks Snapshot" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            NSDictionary *result = [PXDiagnostics enableObjCHooksSnapshotForBundleID:@"com.finalwire.aida64"];
+            NSDictionary *result = [PXDiagnostics enableObjCHooksSnapshotForBundleID:targetBundleID];
             dispatch_async(dispatch_get_main_queue(), ^{
                 showResult(@"Enable ObjC Hooks", result);
             });
@@ -609,7 +637,7 @@
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Enable C Hooks Snapshot" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            NSDictionary *result = [PXDiagnostics enableCHooksSnapshotForBundleID:@"com.finalwire.aida64"];
+            NSDictionary *result = [PXDiagnostics enableCHooksSnapshotForBundleID:targetBundleID];
             dispatch_async(dispatch_get_main_queue(), ^{
                 showResult(@"Enable C Hooks", result);
             });
@@ -617,7 +645,7 @@
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Enable dlsym Diagnostic Hook" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            NSDictionary *result = [PXDiagnostics enableDlsymHookSnapshotForBundleID:@"com.finalwire.aida64"];
+            NSDictionary *result = [PXDiagnostics enableDlsymHookSnapshotForBundleID:targetBundleID];
             dispatch_async(dispatch_get_main_queue(), ^{
                 showResult(@"Enable dlsym Hook", result);
             });
@@ -625,7 +653,7 @@
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Enable Device Metrics Hook" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            NSDictionary *result = [PXDiagnostics enableDeviceMetricsHookSnapshotForBundleID:@"com.finalwire.aida64"];
+            NSDictionary *result = [PXDiagnostics enableDeviceMetricsHookSnapshotForBundleID:targetBundleID];
             dispatch_async(dispatch_get_main_queue(), ^{
                 showResult(@"Enable Metrics Hook", result);
             });
@@ -633,7 +661,7 @@
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Enable Network Hook" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            NSDictionary *result = [PXDiagnostics enableNetworkHookSnapshotForBundleID:@"com.finalwire.aida64"];
+            NSDictionary *result = [PXDiagnostics enableNetworkHookSnapshotForBundleID:targetBundleID];
             dispatch_async(dispatch_get_main_queue(), ^{
                 showResult(@"Enable Network Hook", result);
             });
@@ -641,7 +669,7 @@
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Enable Carrier Hook" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            NSDictionary *result = [PXDiagnostics enableCarrierHookSnapshotForBundleID:@"com.finalwire.aida64"];
+            NSDictionary *result = [PXDiagnostics enableCarrierHookSnapshotForBundleID:targetBundleID];
             dispatch_async(dispatch_get_main_queue(), ^{
                 showResult(@"Enable Carrier Hook", result);
             });
@@ -649,7 +677,7 @@
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Enable Private Wi-Fi Hook" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            NSDictionary *result = [PXDiagnostics enablePrivateWiFiHookSnapshotForBundleID:@"com.finalwire.aida64"];
+            NSDictionary *result = [PXDiagnostics enablePrivateWiFiHookSnapshotForBundleID:targetBundleID];
             dispatch_async(dispatch_get_main_queue(), ^{
                 showResult(@"Enable Private Wi-Fi", result);
             });
@@ -659,7 +687,7 @@
         typeof(weakSelf) selfRef = weakSelf;
         if (!selfRef) return;
         UIAlertController *tests = [UIAlertController alertControllerWithTitle:@"C Hook Value Tests"
-                                                                       message:@"Enable one isolated sysctlbyname value, reopen AIDA64 once, then check Injection Marker Status. sysctl/uname interpose is disabled because it exits AIDA64 at carrier load."
+                                                                       message:@"Enable one isolated sysctlbyname value, reopen the target app once, then check Injection Marker Status. sysctl/uname interpose is disabled because it exits some apps at carrier load."
                                                                 preferredStyle:UIAlertControllerStyleActionSheet];
         NSArray<NSDictionary<NSString *, NSString *> *> *modes = @[
             @{@"title": @"Safe sysctlbyname all", @"mode": @"sysctlbyname-safe"},
@@ -673,7 +701,7 @@
             NSString *mode = entry[@"mode"] ?: @"sysctlbyname-safe";
             [tests addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action2) {
                 dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                    NSDictionary *result = [PXDiagnostics enableCHookTestSnapshotForBundleID:@"com.finalwire.aida64" mode:mode];
+                    NSDictionary *result = [PXDiagnostics enableCHookTestSnapshotForBundleID:targetBundleID mode:mode];
                     dispatch_async(dispatch_get_main_queue(), ^{
                         showResult(title, result);
                     });
@@ -687,7 +715,7 @@
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Scan Framework Carriers" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            NSDictionary *result = [PXDiagnostics scanFrameworkCarriersBundleID:@"com.finalwire.aida64"];
+            NSDictionary *result = [PXDiagnostics scanFrameworkCarriersBundleID:targetBundleID];
             dispatch_async(dispatch_get_main_queue(), ^{
                 showResult(@"Framework Carriers", result);
             });
@@ -697,12 +725,12 @@
         typeof(weakSelf) selfRef = weakSelf;
         if (!selfRef) return;
         UIAlertController *confirm = [UIAlertController alertControllerWithTitle:@"Patch Carrier"
-                                                                         message:@"Scans AIDA64 Frameworks, selects an unencrypted Mach-O carrier, injects ProjectXInject.dylib into it, and writes a restore backup."
+                                                                         message:[NSString stringWithFormat:@"Scans %@ Frameworks, selects an unencrypted Mach-O carrier, injects ProjectXInject.dylib into it, and writes a restore backup.", targetBundleID]
                                                                   preferredStyle:UIAlertControllerStyleAlert];
         [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
         [confirm addAction:[UIAlertAction actionWithTitle:@"Patch" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action2) {
             dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                NSDictionary *result = [PXDiagnostics patchFrameworkCarrierBundleID:@"com.finalwire.aida64"];
+                NSDictionary *result = [PXDiagnostics patchFrameworkCarrierBundleID:targetBundleID];
                 dispatch_async(dispatch_get_main_queue(), ^{
                     showResult(@"Patch Carrier", result);
                 });
@@ -712,7 +740,7 @@
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Patch Prepared Copy" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            NSDictionary *result = [PXDiagnostics patchPreparedInPlaceCopyBundleID:@"com.finalwire.aida64"];
+            NSDictionary *result = [PXDiagnostics patchPreparedInPlaceCopyBundleID:targetBundleID];
             dispatch_async(dispatch_get_main_queue(), ^{
                 showResult(@"Patch Prepared Copy", result);
             });
@@ -720,7 +748,7 @@
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Export Patched TIPA" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            NSDictionary *result = [PXDiagnostics exportPatchedTIPABundleID:@"com.finalwire.aida64"];
+            NSDictionary *result = [PXDiagnostics exportPatchedTIPABundleID:targetBundleID];
             dispatch_async(dispatch_get_main_queue(), ^{
                 showResult(@"Export Patched TIPA", result);
             });
@@ -735,7 +763,7 @@
         [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
         [confirm addAction:[UIAlertAction actionWithTitle:@"Install" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action2) {
             dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                NSDictionary *result = [PXDiagnostics installPatchedInPlaceCopyBundleID:@"com.finalwire.aida64"];
+                NSDictionary *result = [PXDiagnostics installPatchedInPlaceCopyBundleID:targetBundleID];
                 dispatch_async(dispatch_get_main_queue(), ^{
                     showResult(@"Install Patched Copy", result);
                 });
@@ -747,12 +775,12 @@
         typeof(weakSelf) selfRef = weakSelf;
         if (!selfRef) return;
         UIAlertController *confirm = [UIAlertController alertControllerWithTitle:@"Install No Launch"
-                                                                         message:@"Replaces the target executable but does not open AIDA64. Use In-Place Status immediately after this."
+                                                                         message:@"Replaces the target executable but does not open the target app. Use In-Place Status immediately after this."
                                                                   preferredStyle:UIAlertControllerStyleAlert];
         [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
         [confirm addAction:[UIAlertAction actionWithTitle:@"Install" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action2) {
             dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                NSDictionary *result = [PXDiagnostics installPatchedInPlaceCopyWithoutLaunchBundleID:@"com.finalwire.aida64"];
+                NSDictionary *result = [PXDiagnostics installPatchedInPlaceCopyWithoutLaunchBundleID:targetBundleID];
                 dispatch_async(dispatch_get_main_queue(), ^{
                     showResult(@"Install No Launch", result);
                 });
@@ -764,12 +792,12 @@
         typeof(weakSelf) selfRef = weakSelf;
         if (!selfRef) return;
         UIAlertController *confirm = [UIAlertController alertControllerWithTitle:@"Restore Original"
-                                                                         message:@"Restores the backed up executable and removes ProjectXInject.dylib for AIDA64."
+                                                                         message:@"Restores the backed up executable and removes ProjectXInject.dylib for the selected target."
                                                                   preferredStyle:UIAlertControllerStyleAlert];
         [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
         [confirm addAction:[UIAlertAction actionWithTitle:@"Restore" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action2) {
             dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                NSDictionary *result = [PXDiagnostics restoreInPlaceBundleID:@"com.finalwire.aida64"];
+                NSDictionary *result = [PXDiagnostics restoreInPlaceBundleID:targetBundleID];
                 dispatch_async(dispatch_get_main_queue(), ^{
                     showResult(@"Restore In-Place", result);
                 });
