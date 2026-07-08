@@ -155,7 +155,8 @@ static void PXDiagAddSnapshotFlags(NSMutableDictionary *info, NSDictionary *snap
 }
 
 + (NSDictionary<NSString *,id> *)resolveAppQuery:(NSString *)query {
-    NSString *trimmed = [[query ?: @""] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSString *rawQuery = query ? query : @"";
+    NSString *trimmed = [rawQuery stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     NSString *fallback = @"com.finalwire.aida64";
     if (!trimmed.length) trimmed = fallback;
     NSMutableArray *matches = [NSMutableArray array];
@@ -170,7 +171,7 @@ static void PXDiagAddSnapshotFlags(NSMutableDictionary *info, NSDictionary *snap
             @try { bundleID = [direct valueForKey:@"bundleIdentifier"]; } @catch (__unused NSException *e) {}
             @try { name = [direct valueForKey:@"localizedName"]; } @catch (__unused NSException *e) {}
             if (bundleID.length) {
-                NSDictionary *result = @{@"query": trimmed, @"bundleID": bundleID, @"name": name ?: @"", @"matchType": @"bundle-id", @"matches": @[]};
+                NSDictionary *result = @{@"query": trimmed, @"bundleID": bundleID, @"name": name ? name : @"", @"matchType": @"bundle-id", @"matches": @[]};
                 [self log:@"[app] resolve query=%@ result=%@", trimmed, result];
                 return result;
             }
@@ -184,20 +185,23 @@ static void PXDiagAddSnapshotFlags(NSMutableDictionary *info, NSDictionary *snap
         for (id app in apps) {
             NSString *bundleID = nil;
             NSString *name = nil;
-            @try { bundleID = [app valueForKey:@"bundleIdentifier"] ?: [app valueForKey:@"applicationIdentifier"]; } @catch (__unused NSException *e) {}
+            @try {
+                bundleID = [app valueForKey:@"bundleIdentifier"];
+                if (!bundleID.length) bundleID = [app valueForKey:@"applicationIdentifier"];
+            } @catch (__unused NSException *e) {}
             @try { name = [app valueForKey:@"localizedName"]; } @catch (__unused NSException *e) {}
-            NSString *bidLower = bundleID.lowercaseString ?: @"";
-            NSString *nameLower = name.lowercaseString ?: @"";
+            NSString *bidLower = bundleID.lowercaseString ? bundleID.lowercaseString : @"";
+            NSString *nameLower = name.lowercaseString ? name.lowercaseString : @"";
             if (!bundleID.length) continue;
             BOOL exactName = [nameLower isEqualToString:needle];
             BOOL containsName = [nameLower containsString:needle];
             BOOL containsBundle = [bidLower containsString:needle];
             if (exactName || containsName || containsBundle) {
-                [matches addObject:@{@"bundleID": bundleID, @"name": name ?: @"", @"exactName": exactName ? @"YES" : @"NO"}];
+                [matches addObject:@{@"bundleID": bundleID, @"name": name ? name : @"", @"exactName": exactName ? @"YES" : @"NO"}];
             }
         }
     } @catch (NSException *ex) {
-        NSDictionary *result = @{@"query": trimmed, @"bundleID": trimmed, @"name": @"", @"matchType": @"error-fallback", @"error": [NSString stringWithFormat:@"%@ %@", ex.name ?: @"", ex.reason ?: @""], @"matches": matches};
+        NSDictionary *result = @{@"query": trimmed, @"bundleID": trimmed, @"name": @"", @"matchType": @"error-fallback", @"error": [NSString stringWithFormat:@"%@ %@", ex.name ? ex.name : @"", ex.reason ? ex.reason : @""], @"matches": matches};
         [self log:@"[app] resolve query exception result=%@", result];
         return result;
     }
@@ -211,10 +215,10 @@ static void PXDiagAddSnapshotFlags(NSMutableDictionary *info, NSDictionary *snap
     }
     if (!selected) selected = matches.firstObject;
     NSDictionary *result = @{@"query": trimmed,
-                             @"bundleID": selected[@"bundleID"] ?: trimmed,
-                             @"name": selected[@"name"] ?: @"",
+                             @"bundleID": selected[@"bundleID"] ? selected[@"bundleID"] : trimmed,
+                             @"name": selected[@"name"] ? selected[@"name"] : @"",
                              @"matchType": selected ? @"name-search" : @"query-fallback",
-                             @"matches": matches ?: @[]};
+                             @"matches": matches ? matches : @[]};
     [self log:@"[app] resolve query=%@ result=%@", trimmed, result];
     return result;
 }

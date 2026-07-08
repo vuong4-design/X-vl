@@ -555,7 +555,8 @@
         }];
         [prompt addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
         [prompt addAction:[UIAlertAction actionWithTitle:@"Export" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action2) {
-            NSString *bundleID = [PXDiagnostics resolveAppQuery:prompt.textFields.firstObject.text ?: targetBundleID][@"bundleID"] ?: targetBundleID;
+            NSDictionary *resolved = [PXDiagnostics resolveAppQuery:prompt.textFields.firstObject.text ?: targetBundleID];
+            NSString *bundleID = resolved[@"bundleID"] ?: targetBundleID;
             showResult(@"Injection Snapshot", [PXDiagnostics injectionSnapshotForBundleID:bundleID]);
         }]];
         [selfRef presentViewController:prompt animated:YES completion:nil];
@@ -574,7 +575,8 @@
         }];
         [prompt addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
         [prompt addAction:[UIAlertAction actionWithTitle:@"Launch" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action2) {
-            NSString *bundleID = [PXDiagnostics resolveAppQuery:prompt.textFields.firstObject.text ?: targetBundleID][@"bundleID"] ?: targetBundleID;
+            NSDictionary *resolved = [PXDiagnostics resolveAppQuery:prompt.textFields.firstObject.text ?: targetBundleID];
+            NSString *bundleID = resolved[@"bundleID"] ?: targetBundleID;
             showResult(@"DYLD Launcher", [PXDiagnostics dyldLaunchBundleID:bundleID]);
         }]];
         [selfRef presentViewController:prompt animated:YES completion:nil];
@@ -593,7 +595,8 @@
         }];
         [prompt addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
         [prompt addAction:[UIAlertAction actionWithTitle:@"Prepare" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action2) {
-            NSString *bundleID = [PXDiagnostics resolveAppQuery:prompt.textFields.firstObject.text ?: targetBundleID][@"bundleID"] ?: targetBundleID;
+            NSDictionary *resolved = [PXDiagnostics resolveAppQuery:prompt.textFields.firstObject.text ?: targetBundleID];
+            NSString *bundleID = resolved[@"bundleID"] ?: targetBundleID;
             dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
                 NSDictionary *result = [PXDiagnostics prepareInPlaceBundleID:bundleID];
                 dispatch_async(dispatch_get_main_queue(), ^{
