@@ -3,6 +3,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <dispatch/dispatch.h>
 #import <dlfcn.h>
 #import <errno.h>
 #import <mach-o/dyld.h>
@@ -13,7 +14,14 @@
 #import <mach/mach_host.h>
 #import <stdarg.h>
 #import <string.h>
+#import <ifaddrs.h>
+#import <net/if.h>
+#import <net/if_dl.h>
+#import <netinet/in.h>
+#import <arpa/inet.h>
+#import <sys/ioctl.h>
 #import <sys/mount.h>
+#import <sys/sockio.h>
 #import <sys/sysctl.h>
 #import <sys/time.h>
 #import <sys/utsname.h>
@@ -402,6 +410,36 @@ static BOOL PXHasNetworkSnapshot(void) {
     return PXSnapshotString(@"SSID").length > 0 || PXSnapshotString(@"BSSID").length > 0 || PXSnapshotString(@"CarrierName").length > 0 || PXSnapshotString(@"CarrierMCC").length > 0 || PXSnapshotString(@"CarrierMNC").length > 0;
 }
 
+static NSString *PXCarrierName(void) {
+    return PXSnapshotString(@"CarrierName") ?: @"Viettel";
+}
+
+static NSString *PXCarrierMCC(void) {
+    return PXSnapshotString(@"CarrierMCC") ?: @"452";
+}
+
+static NSString *PXCarrierMNC(void) {
+    return PXSnapshotString(@"CarrierMNC") ?: @"04";
+}
+
+static NSString *PXCarrierISO(void) {
+    NSString *mcc = PXCarrierMCC();
+    if ([mcc isEqualToString:@"452"]) return @"vn";
+    return nil;
+}
+
+static id PXCarrierProviderObject(id original) {
+    if (original) return original;
+    if (!PXCarrierName().length && !PXCarrierMCC().length && !PXCarrierMNC().length) return nil;
+    static id provider = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        Class carrier = NSClassFromString(@"CTCarrier");
+        if (carrier) provider = [[carrier alloc] init];
+    });
+    return provider;
+}
+
 static NSDictionary *PXWiFiNetworkInfo(void) {
     NSString *ssid = PXSnapshotString(@"SSID");
     NSString *bssid = PXSnapshotString(@"BSSID");
@@ -411,6 +449,50 @@ static NSDictionary *PXWiFiNetworkInfo(void) {
     if (bssid.length) info[@"BSSID"] = bssid;
     if (ssid.length) info[@"SSIDDATA"] = [ssid dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data];
     return info;
+}
+
+static NSString *PXSnapshotLocalIPv4(void) {
+    NSString *value = PXSnapshotString(@"LocalIPAddress");
+    return value.length ? value : @"192.168.1.64";
+}
+
+static NSString *PXSnapshotLocalIPv6(void) {
+    NSString *value = PXSnapshotString(@"LocalIPv6Address");
+    return value.length ? value : @"fe80::1234:abcd:5678:9abc";
+}
+
+static NSString *PXSnapshotWiFiMAC(void) {
+    NSString *value = PXSnapshotString(@"WiFiMAC") ?: PXSnapshotString(@"MACAddress") ?: PXSnapshotString(@"BSSID");
+    return value.length ? value : @"02:00:00:00:00:00";
+}
+
+static BOOL PXParseMACAddress(NSString *value, uint8_t out[6]) {
+    if (!value.length || !out) return NO;
+    NSArray<NSString *> *parts = [value componentsSeparatedByString:@":"];
+    if (parts.count != 6) return NO;
+    for (NSUInteger i = 0; i < 6; i++) {
+        unsigned int byte = 0;
+        NSScanner *scanner = [NSScanner scannerWithString:parts[i]];
+        if (![scanner scanHexInt:&byte] || byte > 0xff) return NO;
+        out[i] = (uint8_t)byte;
+    }
+    return YES;
+}
+
+static BOOL PXFillSockaddrIn(struct sockaddr_in *addr, NSString *ip) {
+    if (!addr || !ip.length) return NO;
+    memset(addr, 0, sizeof(*addr));
+    addr->sin_len = sizeof(*addr);
+    addr->sin_family = AF_INET;
+    return inet_pton(AF_INET, ip.UTF8String, &addr->sin_addr) == 1;
+}
+
+static BOOL PXFillSockaddrIn6(struct sockaddr_in6 *addr, NSString *ip) {
+    if (!addr || !ip.length) return NO;
+    memset(addr, 0, sizeof(*addr));
+    addr->sin6_len = sizeof(*addr);
+    addr->sin6_family = AF_INET6;
+    return inet_pton(AF_INET6, ip.UTF8String, &addr->sin6_addr) == 1;
 }
 
 static NSUInteger PXSnapshotUnsignedInteger(NSString *key) {
@@ -672,39 +754,43 @@ static NSUUID *px_UIDevice_identifierForVendor(id self, SEL _cmd) {
 
 static id px_CTTelephonyNetworkInfo_subscriberCellularProvider(id self, SEL _cmd) {
     id provider = orig_CTTelephonyNetworkInfo_subscriberCellularProvider ? orig_CTTelephonyNetworkInfo_subscriberCellularProvider(self, _cmd) : nil;
-    BOOL active = PXHasNetworkSnapshot();
+    provider = PXCarrierProviderObject(provider);
+    BOOL active = provider != nil && PXHasNetworkSnapshot();
     PXRecordHookCall(@"network", @"CTTelephonyNetworkInfo.subscriberCellularProvider", active ? @"provider" : @"", active, active);
     return provider;
 }
 
 static id px_CTTelephonyNetworkInfo_serviceSubscriberCellularProviders(id self, SEL _cmd) {
     id providers = orig_CTTelephonyNetworkInfo_serviceSubscriberCellularProviders ? orig_CTTelephonyNetworkInfo_serviceSubscriberCellularProviders(self, _cmd) : nil;
-    BOOL active = PXHasNetworkSnapshot();
+    if (!providers || ([providers respondsToSelector:@selector(count)] && [providers count] == 0)) {
+        id provider = PXCarrierProviderObject(nil);
+        if (provider) providers = @{@"0000000100000001": provider};
+    }
+    BOOL active = providers != nil && PXHasNetworkSnapshot();
     PXRecordHookCall(@"network", @"CTTelephonyNetworkInfo.serviceSubscriberCellularProviders", active ? @"providers" : @"", active, active);
     return providers;
 }
 
 static NSString *px_CTCarrier_carrierName(id self, SEL _cmd) {
-    NSString *value = PXSnapshotString(@"CarrierName");
+    NSString *value = PXCarrierName();
     PXRecordHookCall(@"network", @"CTCarrier.carrierName", value ?: @"", value.length > 0, value.length > 0);
     return value ?: (orig_CTCarrier_carrierName ? orig_CTCarrier_carrierName(self, _cmd) : nil);
 }
 
 static NSString *px_CTCarrier_mobileCountryCode(id self, SEL _cmd) {
-    NSString *value = PXSnapshotString(@"CarrierMCC");
+    NSString *value = PXCarrierMCC();
     PXRecordHookCall(@"network", @"CTCarrier.mobileCountryCode", value ?: @"", value.length > 0, value.length > 0);
     return value ?: (orig_CTCarrier_mobileCountryCode ? orig_CTCarrier_mobileCountryCode(self, _cmd) : nil);
 }
 
 static NSString *px_CTCarrier_mobileNetworkCode(id self, SEL _cmd) {
-    NSString *value = PXSnapshotString(@"CarrierMNC");
+    NSString *value = PXCarrierMNC();
     PXRecordHookCall(@"network", @"CTCarrier.mobileNetworkCode", value ?: @"", value.length > 0, value.length > 0);
     return value ?: (orig_CTCarrier_mobileNetworkCode ? orig_CTCarrier_mobileNetworkCode(self, _cmd) : nil);
 }
 
 static NSString *px_CTCarrier_isoCountryCode(id self, SEL _cmd) {
-    NSString *mcc = PXSnapshotString(@"CarrierMCC");
-    NSString *value = [mcc isEqualToString:@"452"] ? @"vn" : nil;
+    NSString *value = PXCarrierISO();
     PXRecordHookCall(@"network", @"CTCarrier.isoCountryCode", value ?: @"", value.length > 0, value.length > 0);
     return value ?: (orig_CTCarrier_isoCountryCode ? orig_CTCarrier_isoCountryCode(self, _cmd) : nil);
 }
@@ -923,6 +1009,14 @@ static CFTypeRef (*orig_MGCopyAnswer)(CFStringRef) = NULL;
 static CFTypeRef (*orig_MGCopyAnswerWithError)(CFStringRef, int *) = NULL;
 static CFArrayRef (*orig_CNCopySupportedInterfaces)(void) = NULL;
 static CFDictionaryRef (*orig_CNCopyCurrentNetworkInfo)(CFStringRef) = NULL;
+static int (*orig_getifaddrs)(struct ifaddrs **) = NULL;
+static unsigned int (*orig_if_nametoindex)(const char *) = NULL;
+static int (*orig_ioctl)(int, unsigned long, void *) = NULL;
+static CFPropertyListRef (*orig_SCDynamicStoreCopyValue)(void *, CFStringRef) = NULL;
+static CFArrayRef (*orig_WiFiManagerClientCopyDevices)(void *) = NULL;
+static CFStringRef (*orig_WiFiDeviceClientCopyCurrentNetwork)(void *) = NULL;
+static CFStringRef (*orig_WiFiNetworkGetSSID)(void *) = NULL;
+static CFStringRef (*orig_WiFiNetworkGetBSSID)(void *) = NULL;
 static int (*orig_statfs)(const char *, struct statfs *) = NULL;
 static int (*orig_getfsstat)(struct statfs *, int, int) = NULL;
 static kern_return_t (*orig_host_statistics64)(host_t, host_flavor_t, host_info64_t, mach_msg_type_number_t *) = NULL;
@@ -934,6 +1028,14 @@ static int px_uname(struct utsname *value);
 static void *px_dlsym(void *handle, const char *symbol);
 static CFArrayRef px_CNCopySupportedInterfaces(void);
 static CFDictionaryRef px_CNCopyCurrentNetworkInfo(CFStringRef interfaceName);
+static int px_getifaddrs(struct ifaddrs **interfaces);
+static unsigned int px_if_nametoindex(const char *name);
+static int px_ioctl(int fd, unsigned long request, void *argp);
+static CFPropertyListRef px_SCDynamicStoreCopyValue(void *store, CFStringRef key);
+static CFArrayRef px_WiFiManagerClientCopyDevices(void *manager);
+static CFStringRef px_WiFiDeviceClientCopyCurrentNetwork(void *device);
+static CFStringRef px_WiFiNetworkGetSSID(void *network);
+static CFStringRef px_WiFiNetworkGetBSSID(void *network);
 static int px_statfs(const char *path, struct statfs *buf);
 static int px_getfsstat(struct statfs *buf, int bufsize, int flags);
 static kern_return_t px_host_statistics64(host_t host, host_flavor_t flavor, host_info64_t info, mach_msg_type_number_t *count);
@@ -1154,6 +1256,14 @@ static void PXRebindNetwork(void) {
         const struct mach_header_64 *header = (const struct mach_header_64 *)_dyld_get_image_header(i);
         gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_CNCopySupportedInterfaces", (const void *)px_CNCopySupportedInterfaces, (void **)&orig_CNCopySupportedInterfaces);
         gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_CNCopyCurrentNetworkInfo", (const void *)px_CNCopyCurrentNetworkInfo, (void **)&orig_CNCopyCurrentNetworkInfo);
+        gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_getifaddrs", (const void *)px_getifaddrs, (void **)&orig_getifaddrs);
+        gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_if_nametoindex", (const void *)px_if_nametoindex, (void **)&orig_if_nametoindex);
+        gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_ioctl", (const void *)px_ioctl, (void **)&orig_ioctl);
+        gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_SCDynamicStoreCopyValue", (const void *)px_SCDynamicStoreCopyValue, (void **)&orig_SCDynamicStoreCopyValue);
+        gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_WiFiManagerClientCopyDevices", (const void *)px_WiFiManagerClientCopyDevices, (void **)&orig_WiFiManagerClientCopyDevices);
+        gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_WiFiDeviceClientCopyCurrentNetwork", (const void *)px_WiFiDeviceClientCopyCurrentNetwork, (void **)&orig_WiFiDeviceClientCopyCurrentNetwork);
+        gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_WiFiNetworkGetSSID", (const void *)px_WiFiNetworkGetSSID, (void **)&orig_WiFiNetworkGetSSID);
+        gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_WiFiNetworkGetBSSID", (const void *)px_WiFiNetworkGetBSSID, (void **)&orig_WiFiNetworkGetBSSID);
     }
     PXRecordHookCall(@"rebind-summary", @"network-c", [NSString stringWithFormat:@"images=%lu patched=%lu", (unsigned long)gNetworkImagesScanned, (unsigned long)gNetworkSymbolsPatched], gNetworkSymbolsPatched > 0, gNetworkSymbolsPatched > 0);
 }
@@ -1351,11 +1461,134 @@ static CFDictionaryRef px_CNCopyCurrentNetworkInfo(CFStringRef interfaceName) {
     NSDictionary *network = PXWiFiNetworkInfo();
     if (gCHooksReady && gEnableDeviceMetricsHook && network.count) {
         NSString *iface = interfaceName ? (__bridge NSString *)interfaceName : @"";
-        PXRecordHookCall(@"network-c", @"CNCopyCurrentNetworkInfo", [NSString stringWithFormat:@"%@ %@", iface ?: @"", network[@"SSID"] ?: @""], YES, YES);
+        PXRecordHookCall(@"network-c", @"CNCopyCurrentNetworkInfo", [NSString stringWithFormat:@"%@ %@ %@", iface ?: @"", network[@"SSID"] ?: @"", network[@"BSSID"] ?: @""], YES, YES);
         return CFBridgingRetain(network);
     }
     if (!orig_CNCopyCurrentNetworkInfo) orig_CNCopyCurrentNetworkInfo = dlsym(RTLD_NEXT, "CNCopyCurrentNetworkInfo");
     return orig_CNCopyCurrentNetworkInfo ? orig_CNCopyCurrentNetworkInfo(interfaceName) : NULL;
+}
+
+static int px_getifaddrs(struct ifaddrs **interfaces) {
+    if (!orig_getifaddrs) orig_getifaddrs = dlsym(RTLD_NEXT, "getifaddrs");
+    int result = orig_getifaddrs ? orig_getifaddrs(interfaces) : -1;
+    if (result != 0 || !gCHooksReady || !gEnableDeviceMetricsHook || !interfaces || !*interfaces) return result;
+    NSString *ipv4 = PXSnapshotLocalIPv4();
+    NSString *ipv6 = PXSnapshotLocalIPv6();
+    NSString *mac = PXSnapshotWiFiMAC();
+    BOOL spoofed = NO;
+    for (struct ifaddrs *cursor = *interfaces; cursor; cursor = cursor->ifa_next) {
+        if (!cursor->ifa_name || strcmp(cursor->ifa_name, "en0") != 0 || !cursor->ifa_addr) continue;
+        if (cursor->ifa_addr->sa_family == AF_INET) {
+            spoofed |= PXFillSockaddrIn((struct sockaddr_in *)cursor->ifa_addr, ipv4);
+        } else if (cursor->ifa_addr->sa_family == AF_INET6) {
+            spoofed |= PXFillSockaddrIn6((struct sockaddr_in6 *)cursor->ifa_addr, ipv6);
+        } else if (cursor->ifa_addr->sa_family == AF_LINK) {
+            struct sockaddr_dl *dl = (struct sockaddr_dl *)cursor->ifa_addr;
+            uint8_t bytes[6] = {0};
+            if (dl->sdl_alen >= 6 && PXParseMACAddress(mac, bytes)) {
+                memcpy(LLADDR(dl), bytes, 6);
+                spoofed = YES;
+            }
+        }
+    }
+    PXRecordHookCall(@"network-c", @"getifaddrs", [NSString stringWithFormat:@"en0 %@ %@ %@", ipv4 ?: @"", ipv6 ?: @"", mac ?: @""], spoofed, spoofed);
+    return result;
+}
+
+static unsigned int px_if_nametoindex(const char *name) {
+    if (!orig_if_nametoindex) orig_if_nametoindex = dlsym(RTLD_NEXT, "if_nametoindex");
+    unsigned int result = orig_if_nametoindex ? orig_if_nametoindex(name) : 0;
+    if (gCHooksReady && gEnableDeviceMetricsHook && name && strcmp(name, "en0") == 0) {
+        PXRecordHookCall(@"network-c", @"if_nametoindex", [NSString stringWithFormat:@"en0=%u", result ?: 4], YES, YES);
+        return result ?: 4;
+    }
+    return result;
+}
+
+static int px_ioctl(int fd, unsigned long request, void *argp) {
+    if (!orig_ioctl) orig_ioctl = dlsym(RTLD_NEXT, "ioctl");
+    int result = orig_ioctl ? orig_ioctl(fd, request, argp) : -1;
+    if (result != 0 || !gCHooksReady || !gEnableDeviceMetricsHook || !argp) return result;
+    struct ifreq *ifr = (struct ifreq *)argp;
+    if (strncmp(ifr->ifr_name, "en0", IFNAMSIZ) != 0) return result;
+    if (request == SIOCGIFADDR) {
+        NSString *ipv4 = PXSnapshotLocalIPv4();
+        BOOL copied = PXFillSockaddrIn((struct sockaddr_in *)&ifr->ifr_addr, ipv4);
+        PXRecordHookCall(@"network-c", @"ioctl.SIOCGIFADDR", ipv4 ?: @"", copied, copied);
+    }
+#ifdef SIOCGIFLLADDR
+    else if (request == SIOCGIFLLADDR) {
+        NSString *mac = PXSnapshotWiFiMAC();
+        uint8_t bytes[6] = {0};
+        BOOL copied = PXParseMACAddress(mac, bytes);
+        if (copied) memcpy(ifr->ifr_addr.sa_data, bytes, 6);
+        PXRecordHookCall(@"network-c", @"ioctl.SIOCGIFLLADDR", mac ?: @"", copied, copied);
+    }
+#endif
+    return result;
+}
+
+static CFPropertyListRef px_SCDynamicStoreCopyValue(void *store, CFStringRef key) {
+    NSString *keyString = key ? (__bridge NSString *)key : @"";
+    if (gCHooksReady && gEnableDeviceMetricsHook && keyString.length) {
+        NSDictionary *wifi = PXWiFiNetworkInfo();
+        NSString *ipv4 = PXSnapshotLocalIPv4();
+        NSString *ipv6 = PXSnapshotLocalIPv6();
+        if ([keyString containsString:@"State:/Network/Interface/en0/IPv4"] && ipv4.length) {
+            NSDictionary *value = @{@"Addresses": @[ipv4], @"InterfaceName": @"en0"};
+            PXRecordHookCall(@"network-c", @"SCDynamicStoreCopyValue.IPv4", ipv4, YES, YES);
+            return CFBridgingRetain(value);
+        }
+        if ([keyString containsString:@"State:/Network/Interface/en0/IPv6"] && ipv6.length) {
+            NSDictionary *value = @{@"Addresses": @[ipv6], @"InterfaceName": @"en0"};
+            PXRecordHookCall(@"network-c", @"SCDynamicStoreCopyValue.IPv6", ipv6, YES, YES);
+            return CFBridgingRetain(value);
+        }
+        if (([keyString containsString:@"AirPort"] || [keyString containsString:@"Wi-Fi"] || [keyString containsString:@"WiFi"]) && wifi.count) {
+            PXRecordHookCall(@"network-c", @"SCDynamicStoreCopyValue.WiFi", [NSString stringWithFormat:@"%@ %@", wifi[@"SSID"] ?: @"", wifi[@"BSSID"] ?: @""], YES, YES);
+            return CFBridgingRetain(wifi);
+        }
+    }
+    if (!orig_SCDynamicStoreCopyValue) orig_SCDynamicStoreCopyValue = dlsym(RTLD_NEXT, "SCDynamicStoreCopyValue");
+    return orig_SCDynamicStoreCopyValue ? orig_SCDynamicStoreCopyValue(store, key) : NULL;
+}
+
+static CFArrayRef px_WiFiManagerClientCopyDevices(void *manager) {
+    if (gCHooksReady && gEnableDeviceMetricsHook && PXWiFiNetworkInfo().count) {
+        PXRecordHookCall(@"network-private", @"WiFiManagerClientCopyDevices", @"en0", YES, YES);
+        return CFBridgingRetain(@[@"en0"]);
+    }
+    if (!orig_WiFiManagerClientCopyDevices) orig_WiFiManagerClientCopyDevices = dlsym(RTLD_NEXT, "WiFiManagerClientCopyDevices");
+    return orig_WiFiManagerClientCopyDevices ? orig_WiFiManagerClientCopyDevices(manager) : NULL;
+}
+
+static CFStringRef px_WiFiDeviceClientCopyCurrentNetwork(void *device) {
+    if (gCHooksReady && gEnableDeviceMetricsHook && PXWiFiNetworkInfo().count) {
+        PXRecordHookCall(@"network-private", @"WiFiDeviceClientCopyCurrentNetwork", @"ProjectXNetwork", YES, YES);
+        return CFBridgingRetain(@"ProjectXNetwork");
+    }
+    if (!orig_WiFiDeviceClientCopyCurrentNetwork) orig_WiFiDeviceClientCopyCurrentNetwork = dlsym(RTLD_NEXT, "WiFiDeviceClientCopyCurrentNetwork");
+    return orig_WiFiDeviceClientCopyCurrentNetwork ? orig_WiFiDeviceClientCopyCurrentNetwork(device) : NULL;
+}
+
+static CFStringRef px_WiFiNetworkGetSSID(void *network) {
+    NSString *ssid = PXSnapshotString(@"SSID");
+    if (gCHooksReady && gEnableDeviceMetricsHook && ssid.length) {
+        PXRecordHookCall(@"network-private", @"WiFiNetworkGetSSID", ssid, YES, YES);
+        return (__bridge CFStringRef)ssid;
+    }
+    if (!orig_WiFiNetworkGetSSID) orig_WiFiNetworkGetSSID = dlsym(RTLD_NEXT, "WiFiNetworkGetSSID");
+    return orig_WiFiNetworkGetSSID ? orig_WiFiNetworkGetSSID(network) : NULL;
+}
+
+static CFStringRef px_WiFiNetworkGetBSSID(void *network) {
+    NSString *bssid = PXSnapshotString(@"BSSID");
+    if (gCHooksReady && gEnableDeviceMetricsHook && bssid.length) {
+        PXRecordHookCall(@"network-private", @"WiFiNetworkGetBSSID", bssid, YES, YES);
+        return (__bridge CFStringRef)bssid;
+    }
+    if (!orig_WiFiNetworkGetBSSID) orig_WiFiNetworkGetBSSID = dlsym(RTLD_NEXT, "WiFiNetworkGetBSSID");
+    return orig_WiFiNetworkGetBSSID ? orig_WiFiNetworkGetBSSID(network) : NULL;
 }
 
 static void *px_dlsym(void *handle, const char *symbol) {
@@ -1408,6 +1641,38 @@ static void *px_dlsym(void *handle, const char *symbol) {
         if ([name isEqualToString:@"CNCopyCurrentNetworkInfo"] && gEnableDeviceMetricsHook) {
             PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
             return (void *)px_CNCopyCurrentNetworkInfo;
+        }
+        if ([name isEqualToString:@"getifaddrs"] && gEnableDeviceMetricsHook) {
+            PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
+            return (void *)px_getifaddrs;
+        }
+        if ([name isEqualToString:@"if_nametoindex"] && gEnableDeviceMetricsHook) {
+            PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
+            return (void *)px_if_nametoindex;
+        }
+        if ([name isEqualToString:@"ioctl"] && gEnableDeviceMetricsHook) {
+            PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
+            return (void *)px_ioctl;
+        }
+        if ([name isEqualToString:@"SCDynamicStoreCopyValue"] && gEnableDeviceMetricsHook) {
+            PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
+            return (void *)px_SCDynamicStoreCopyValue;
+        }
+        if ([name isEqualToString:@"WiFiManagerClientCopyDevices"] && gEnableDeviceMetricsHook) {
+            PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
+            return (void *)px_WiFiManagerClientCopyDevices;
+        }
+        if ([name isEqualToString:@"WiFiDeviceClientCopyCurrentNetwork"] && gEnableDeviceMetricsHook) {
+            PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
+            return (void *)px_WiFiDeviceClientCopyCurrentNetwork;
+        }
+        if ([name isEqualToString:@"WiFiNetworkGetSSID"] && gEnableDeviceMetricsHook) {
+            PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
+            return (void *)px_WiFiNetworkGetSSID;
+        }
+        if ([name isEqualToString:@"WiFiNetworkGetBSSID"] && gEnableDeviceMetricsHook) {
+            PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
+            return (void *)px_WiFiNetworkGetBSSID;
         }
     }
     return PXCallOrigDlsym(handle, symbol);

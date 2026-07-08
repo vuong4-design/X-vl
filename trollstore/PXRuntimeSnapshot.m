@@ -195,11 +195,35 @@ static NSString *PXRTTargetLocalHookStatsPath(NSString *bundleID) {
         @"CarrierName",
         @"CarrierMCC",
         @"CarrierMNC",
+        @"LocalIPAddress",
+        @"LocalIPv6Address",
+        @"WiFiMAC",
+        @"MACAddress",
         @"IDFV"
     ];
     for (NSString *key in keys) {
         snapshot[key] = PXRTValue(deviceIds, key, @"");
     }
+
+    NSDictionary *wifiInfo = PXRTProfilePlist(profileId, @"identity/wifi_info.plist");
+    id ssid = wifiInfo[@"ssid"] ?: wifiInfo[@"SSID"] ?: deviceIds[@"SSID"];
+    id bssid = wifiInfo[@"bssid"] ?: wifiInfo[@"BSSID"] ?: deviceIds[@"BSSID"];
+    if (ssid) snapshot[@"SSID"] = ssid;
+    if (bssid) snapshot[@"BSSID"] = bssid;
+
+    NSDictionary *network = PXRTProfilePlist(profileId, @"identity/network_settings.plist");
+    id localIP = network[@"localIPAddress"] ?: network[@"LocalIPAddress"] ?: deviceIds[@"LocalIPAddress"];
+    id localIPv6 = network[@"localIPv6Address"] ?: network[@"LocalIPv6Address"] ?: deviceIds[@"LocalIPv6Address"];
+    if (localIP) snapshot[@"LocalIPAddress"] = localIP;
+    if (localIPv6) snapshot[@"LocalIPv6Address"] = localIPv6;
+
+    NSDictionary *carrier = PXRTProfilePlist(profileId, @"identity/carrier_info.plist") ?: PXRTProfilePlist(profileId, @"carrier_info.plist");
+    id carrierName = carrier[@"name"] ?: carrier[@"CarrierName"] ?: deviceIds[@"CarrierName"];
+    id carrierMCC = carrier[@"mcc"] ?: carrier[@"CarrierMCC"] ?: deviceIds[@"CarrierMCC"];
+    id carrierMNC = carrier[@"mnc"] ?: carrier[@"CarrierMNC"] ?: deviceIds[@"CarrierMNC"];
+    if (carrierName) snapshot[@"CarrierName"] = carrierName;
+    if (carrierMCC) snapshot[@"CarrierMCC"] = carrierMCC;
+    if (carrierMNC) snapshot[@"CarrierMNC"] = carrierMNC;
 
     NSDictionary *storage = PXRTProfilePlist(profileId, @"storage.plist");
     if (storage[@"TotalStorage"]) snapshot[@"TotalStorage"] = storage[@"TotalStorage"];
