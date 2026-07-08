@@ -48,6 +48,17 @@ static NSDictionary *PXRTDeviceIdsForProfile(NSString *profileId) {
     return nil;
 }
 
+static NSDictionary *PXRTProfilePlist(NSString *profileId, NSString *name) {
+    if (!profileId.length || !name.length) return nil;
+    NSArray<NSString *> *bases = @[PXRTProfilesBase(), @"/private/var/mobile/Library/WeaponX/Profiles"];
+    for (NSString *base in bases) {
+        NSString *path = [[base stringByAppendingPathComponent:profileId] stringByAppendingPathComponent:name];
+        NSDictionary *dict = [NSDictionary dictionaryWithContentsOfFile:path];
+        if ([dict isKindOfClass:[NSDictionary class]] && dict.count) return dict;
+    }
+    return nil;
+}
+
 static id PXRTValue(NSDictionary *dict, NSString *key, id fallback) {
     id value = dict[key];
     return value ?: fallback ?: @"";
@@ -188,6 +199,26 @@ static NSString *PXRTTargetLocalHookStatsPath(NSString *bundleID) {
     ];
     for (NSString *key in keys) {
         snapshot[key] = PXRTValue(deviceIds, key, @"");
+    }
+
+    NSDictionary *storage = PXRTProfilePlist(profileId, @"storage.plist");
+    if (storage[@"TotalStorage"]) snapshot[@"TotalStorage"] = storage[@"TotalStorage"];
+    if (storage[@"FreeStorage"]) snapshot[@"FreeStorage"] = storage[@"FreeStorage"];
+
+    NSDictionary *battery = PXRTProfilePlist(profileId, @"battery_info.plist");
+    id batteryLevel = battery[@"BatteryLevel"] ?: deviceIds[@"BatteryLevel"];
+    if (batteryLevel) snapshot[@"BatteryLevel"] = batteryLevel;
+
+    NSDictionary *uptime = PXRTProfilePlist(profileId, @"system_uptime.plist");
+    id uptimeValue = uptime[@"value"] ?: deviceIds[@"SystemUptime"];
+    if (uptimeValue) snapshot[@"SystemUptime"] = uptimeValue;
+
+    NSDictionary *bootTime = PXRTProfilePlist(profileId, @"boot_time.plist");
+    id bootValue = bootTime[@"value"] ?: deviceIds[@"BootTime"];
+    if ([bootValue isKindOfClass:[NSDate class]]) {
+        snapshot[@"BootTime"] = @([(NSDate *)bootValue timeIntervalSince1970]);
+    } else if (bootValue) {
+        snapshot[@"BootTime"] = bootValue;
     }
 
     NSString *path = [self snapshotPathForBundleID:bundleID];

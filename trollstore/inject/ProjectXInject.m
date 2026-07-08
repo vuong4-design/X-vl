@@ -12,6 +12,7 @@
 #import <stdarg.h>
 #import <string.h>
 #import <sys/sysctl.h>
+#import <sys/time.h>
 #import <sys/utsname.h>
 
 static NSString *const PXInjectBaseDir = @"/var/mobile/Library/ProjectXTroll";
@@ -132,19 +133,116 @@ static BOOL PXCopyUInt64ToSysctlBuffer(uint64_t value, void *oldp, size_t *oldle
     return PXCopyBytesToSysctlBuffer(&value, sizeof(value), oldp, oldlenp);
 }
 
+static BOOL PXCopyTimevalToSysctlBuffer(struct timeval value, void *oldp, size_t *oldlenp) {
+    return PXCopyBytesToSysctlBuffer(&value, sizeof(value), oldp, oldlenp);
+}
+
+static uint32_t PXCPUFamilyForArchitecture(NSString *architecture) {
+    if ([architecture containsString:@"A9"]) return 0x67CEEE93;
+    if ([architecture containsString:@"A10"]) return 0x92FB37C8;
+    if ([architecture containsString:@"A11"]) return 0xDA33D83D;
+    if ([architecture containsString:@"A12"]) return 0x8765EDEA;
+    if ([architecture containsString:@"A13"]) return 0xAF4F32CB;
+    if ([architecture containsString:@"A14"]) return 0x1B588BB3;
+    if ([architecture containsString:@"A15"]) return 0xDA33D83D;
+    if ([architecture containsString:@"A16"]) return 0x8765EDEA;
+    if ([architecture containsString:@"A17"]) return 0xAF4F32CB;
+    if ([architecture containsString:@"A18"]) return 0x1B588BB3;
+    if ([architecture containsString:@"M1"] || [architecture containsString:@"M2"]) return 0x458F4D97;
+    return 0;
+}
+
+static uint32_t PXCPUSubtypeForArchitecture(NSString *architecture) {
+    if ([architecture containsString:@"A9"]) return 2;
+    if ([architecture containsString:@"A10"]) return 3;
+    if ([architecture containsString:@"A11"]) return 4;
+    if ([architecture containsString:@"A12"]) return 5;
+    if ([architecture containsString:@"A13"]) return 6;
+    if ([architecture containsString:@"A14"]) return 7;
+    if ([architecture containsString:@"A15"]) return 8;
+    if ([architecture containsString:@"A16"]) return 9;
+    if ([architecture containsString:@"A17"]) return 10;
+    if ([architecture containsString:@"A18"]) return 11;
+    if ([architecture containsString:@"M1"]) return 12;
+    if ([architecture containsString:@"M2"]) return 13;
+    return 1;
+}
+
+static uint64_t PXCPUFrequencyForArchitecture(NSString *architecture, const char *name) {
+    uint64_t frequency = 0;
+    if ([architecture containsString:@"A9"]) frequency = 1800000000ULL;
+    else if ([architecture containsString:@"A10"]) frequency = 2340000000ULL;
+    else if ([architecture containsString:@"A11"]) frequency = 2390000000ULL;
+    else if ([architecture containsString:@"A12"]) frequency = 2490000000ULL;
+    else if ([architecture containsString:@"A13"]) frequency = 2650000000ULL;
+    else if ([architecture containsString:@"A14"]) frequency = 2990000000ULL;
+    else if ([architecture containsString:@"A15"]) frequency = 3230000000ULL;
+    else if ([architecture containsString:@"A16"]) frequency = 3460000000ULL;
+    else if ([architecture containsString:@"A17"]) frequency = 3780000000ULL;
+    else if ([architecture containsString:@"A18"]) frequency = 4050000000ULL;
+    else if ([architecture containsString:@"M1"]) frequency = 3200000000ULL;
+    else if ([architecture containsString:@"M2"]) frequency = 3490000000ULL;
+    if (frequency > 0 && name && strcmp(name, "hw.cpufrequency_min") == 0) frequency = (uint64_t)((double)frequency * 0.4);
+    return frequency;
+}
+
+static uint32_t PXCacheSizeForArchitecture(NSString *architecture, const char *name) {
+    BOOL l1 = name && (strcmp(name, "hw.l1icachesize") == 0 || strcmp(name, "hw.l1dcachesize") == 0);
+    BOOL l2 = name && strcmp(name, "hw.l2cachesize") == 0;
+    if (!l1 && !l2) return 0;
+    if ([architecture containsString:@"A11"] || [architecture containsString:@"A12"]) return l1 ? 32768 : 8388608;
+    if ([architecture containsString:@"A13"]) return l1 ? 65536 : 8388608;
+    if ([architecture containsString:@"A14"] || [architecture containsString:@"A15"]) return l1 ? 65536 : 12582912;
+    if ([architecture containsString:@"A16"] || [architecture containsString:@"A17"]) return l1 ? 65536 : 16777216;
+    if ([architecture containsString:@"A18"]) return l1 ? 131072 : 20971520;
+    if ([architecture containsString:@"M1"]) return l1 ? 131072 : 12582912;
+    if ([architecture containsString:@"M2"]) return l1 ? 131072 : 16777216;
+    return l1 ? 32768 : 3145728;
+}
+
 static NSString *PXMetricsValueForSysctlName(const char *name, BOOL *isUInt64Out) {
     if (isUInt64Out) *isUInt64Out = NO;
     if (!gEnableDeviceMetricsHook || !name) return nil;
-    if (strcmp(name, "hw.ncpu") == 0 || strcmp(name, "hw.activecpu") == 0) {
+    if (strcmp(name, "hw.ncpu") == 0 || strcmp(name, "hw.activecpu") == 0 || strcmp(name, "hw.physicalcpu") == 0 || strcmp(name, "hw.logicalcpu") == 0) {
         NSUInteger cores = PXSnapshotUnsignedInteger(@"CPUCoreCount");
         return cores > 0 ? [@(cores) stringValue] : nil;
     }
-    if (strcmp(name, "hw.memsize") == 0) {
+    if (strcmp(name, "hw.memsize") == 0 || strcmp(name, "hw.physmem") == 0) {
         NSUInteger gb = PXSnapshotUnsignedInteger(@"DeviceMemory");
         if (isUInt64Out) *isUInt64Out = YES;
         return gb > 0 ? [@((uint64_t)gb * 1024ULL * 1024ULL * 1024ULL) stringValue] : nil;
     }
+    if (strcmp(name, "hw.cpu.brand_string") == 0 || strcmp(name, "machdep.cpu.brand_string") == 0 || strcmp(name, "hw.cpubrand") == 0) {
+        return PXSnapshotString(@"CPUArchitecture");
+    }
+    if (strcmp(name, "hw.cpufamily") == 0 || strcmp(name, "hw.cputype") == 0 || strcmp(name, "hw.cpusubtype") == 0 || strcmp(name, "hw.cachelinesize") == 0) {
+        NSString *architecture = PXSnapshotString(@"CPUArchitecture");
+        if (strcmp(name, "hw.cputype") == 0) return @"16777228";
+        if (strcmp(name, "hw.cpusubtype") == 0) return [@(PXCPUSubtypeForArchitecture(architecture)) stringValue];
+        if (strcmp(name, "hw.cpufamily") == 0) {
+            uint32_t family = PXCPUFamilyForArchitecture(architecture);
+            return family > 0 ? [@(family) stringValue] : nil;
+        }
+        return @"64";
+    }
+    if (strcmp(name, "hw.cpufrequency") == 0 || strcmp(name, "hw.cpufrequency_max") == 0 || strcmp(name, "hw.cpufrequency_min") == 0) {
+        if (isUInt64Out) *isUInt64Out = YES;
+        uint64_t frequency = PXCPUFrequencyForArchitecture(PXSnapshotString(@"CPUArchitecture"), name);
+        return frequency > 0 ? [@(frequency) stringValue] : nil;
+    }
+    if (strcmp(name, "hw.l1icachesize") == 0 || strcmp(name, "hw.l1dcachesize") == 0 || strcmp(name, "hw.l2cachesize") == 0) {
+        uint32_t size = PXCacheSizeForArchitecture(PXSnapshotString(@"CPUArchitecture"), name);
+        return size > 0 ? [@(size) stringValue] : nil;
+    }
     return nil;
+}
+
+static BOOL PXMetricsSysctlNameIsString(const char *name) {
+    return name && (strcmp(name, "hw.cpu.brand_string") == 0 || strcmp(name, "machdep.cpu.brand_string") == 0 || strcmp(name, "hw.cpubrand") == 0);
+}
+
+static BOOL PXMetricsSysctlNameIsUInt64(const char *name) {
+    return name && (strcmp(name, "hw.memsize") == 0 || strcmp(name, "hw.physmem") == 0 || strcmp(name, "hw.cpufrequency") == 0 || strcmp(name, "hw.cpufrequency_max") == 0 || strcmp(name, "hw.cpufrequency_min") == 0);
 }
 
 static NSString *PXValueForSysctlName(const char *name) {
@@ -153,6 +251,9 @@ static NSString *PXValueForSysctlName(const char *name) {
     if (strcmp(name, "hw.model") == 0 && PXSysctlNameEnabled(@"hw.model")) return PXSnapshotString(@"HwModel") ?: PXSnapshotString(@"BoardID");
     if (strcmp(name, "kern.osversion") == 0 && PXSysctlNameEnabled(@"kern.osversion")) return PXSnapshotString(@"IOSBuild");
     if (strcmp(name, "kern.version") == 0 && PXSysctlNameEnabled(@"kern.version")) return PXSnapshotString(@"KernelVersion");
+    if (strcmp(name, "kern.osrelease") == 0) return PXSnapshotString(@"Darwin");
+    if (strcmp(name, "kern.hostname") == 0) return PXSnapshotString(@"DeviceName") ?: PXSnapshotString(@"DeviceModel") ?: @"iPhone";
+    if (strcmp(name, "kern.ostype") == 0) return @"Darwin";
     return nil;
 }
 
@@ -173,6 +274,24 @@ static NSString *PXValueForSysctlMIB(const int *name, u_int namelen, NSString **
     } else if (name[0] == CTL_KERN && name[1] == KERN_VERSION) {
         sysctlName = @"kern.version";
         value = PXSysctlNameEnabled(sysctlName) ? PXSnapshotString(@"KernelVersion") : nil;
+    } else if (name[0] == CTL_KERN && name[1] == KERN_OSRELEASE) {
+        sysctlName = @"kern.osrelease";
+        value = PXSnapshotString(@"Darwin");
+#ifdef KERN_HOSTNAME
+    } else if (name[0] == CTL_KERN && name[1] == KERN_HOSTNAME) {
+        sysctlName = @"kern.hostname";
+        value = PXSnapshotString(@"DeviceName") ?: PXSnapshotString(@"DeviceModel") ?: @"iPhone";
+#endif
+#ifdef KERN_OSTYPE
+    } else if (name[0] == CTL_KERN && name[1] == KERN_OSTYPE) {
+        sysctlName = @"kern.ostype";
+        value = @"Darwin";
+#endif
+#ifdef KERN_BOOTTIME
+    } else if (gEnableDeviceMetricsHook && name[0] == CTL_KERN && name[1] == KERN_BOOTTIME) {
+        sysctlName = @"kern.boottime";
+        value = @"timeval";
+#endif
 #ifdef HW_NCPU
     } else if (gEnableDeviceMetricsHook && name[0] == CTL_HW && name[1] == HW_NCPU) {
         sysctlName = @"hw.ncpu";
@@ -188,6 +307,12 @@ static NSString *PXValueForSysctlMIB(const int *name, u_int namelen, NSString **
 #ifdef HW_MEMSIZE
     } else if (gEnableDeviceMetricsHook && name[0] == CTL_HW && name[1] == HW_MEMSIZE) {
         sysctlName = @"hw.memsize";
+        NSUInteger gb = PXSnapshotUnsignedInteger(@"DeviceMemory");
+        value = gb > 0 ? [@((uint64_t)gb * 1024ULL * 1024ULL * 1024ULL) stringValue] : nil;
+#endif
+#ifdef HW_PHYSMEM
+    } else if (gEnableDeviceMetricsHook && name[0] == CTL_HW && name[1] == HW_PHYSMEM) {
+        sysctlName = @"hw.physmem";
         NSUInteger gb = PXSnapshotUnsignedInteger(@"DeviceMemory");
         value = gb > 0 ? [@((uint64_t)gb * 1024ULL * 1024ULL * 1024ULL) stringValue] : nil;
 #endif
@@ -213,6 +338,32 @@ static double PXSnapshotDouble(NSString *key) {
     if ([value isKindOfClass:[NSNumber class]]) return [(NSNumber *)value doubleValue];
     if ([value isKindOfClass:[NSString class]]) return [(NSString *)value doubleValue];
     return 0;
+}
+
+static uint64_t PXSnapshotStorageBytes(NSString *key) {
+    double gb = PXSnapshotDouble(key);
+    return gb > 0 ? (uint64_t)(gb * 1000.0 * 1000.0 * 1000.0) : 0;
+}
+
+static NSTimeInterval PXSnapshotUptime(void) {
+    NSTimeInterval uptime = PXSnapshotDouble(@"SystemUptime");
+    if (uptime > 0) return uptime;
+    NSTimeInterval boot = PXSnapshotDouble(@"BootTime");
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    return boot > 0 && now > boot ? now - boot : 0;
+}
+
+static BOOL PXSnapshotBootTimeval(struct timeval *outValue) {
+    if (!outValue) return NO;
+    NSTimeInterval boot = PXSnapshotDouble(@"BootTime");
+    if (boot <= 0) {
+        NSTimeInterval uptime = PXSnapshotUptime();
+        if (uptime > 0) boot = [[NSDate date] timeIntervalSince1970] - uptime;
+    }
+    if (boot <= 0) return NO;
+    outValue->tv_sec = (time_t)boot;
+    outValue->tv_usec = 0;
+    return YES;
 }
 
 static NSUInteger PXSnapshotUnsignedInteger(NSString *key) {
@@ -414,10 +565,19 @@ static NSOperatingSystemVersion (*orig_NSProcessInfo_operatingSystemVersion)(id,
 static NSUInteger (*orig_NSProcessInfo_processorCount)(id, SEL) = NULL;
 static NSUInteger (*orig_NSProcessInfo_activeProcessorCount)(id, SEL) = NULL;
 static unsigned long long (*orig_NSProcessInfo_physicalMemory)(id, SEL) = NULL;
+static NSTimeInterval (*orig_NSProcessInfo_systemUptime)(id, SEL) = NULL;
 static CGRect (*orig_UIScreen_bounds)(id, SEL) = NULL;
 static CGRect (*orig_UIScreen_nativeBounds)(id, SEL) = NULL;
 static CGFloat (*orig_UIScreen_scale)(id, SEL) = NULL;
 static CGFloat (*orig_UIScreen_nativeScale)(id, SEL) = NULL;
+static float (*orig_UIDevice_batteryLevel)(id, SEL) = NULL;
+static NSInteger (*orig_UIDevice_batteryState)(id, SEL) = NULL;
+static NSDictionary *(*orig_NSFileManager_attributesOfFileSystemForPath_error)(id, SEL, NSString *, NSError **) = NULL;
+static unsigned long long (*orig_NSFileManager_volumeAvailableCapacityForImportantUsageForURL_error)(id, SEL, NSURL *, NSError **) = NULL;
+static unsigned long long (*orig_NSFileManager_volumeAvailableCapacityForOpportunisticUsageForURL_error)(id, SEL, NSURL *, NSError **) = NULL;
+static unsigned long long (*orig_NSFileManager_volumeTotalCapacityForURL_error)(id, SEL, NSURL *, NSError **) = NULL;
+static BOOL (*orig_NSURL_getResourceValue_forKey_error)(id, SEL, id *, NSString *, NSError **) = NULL;
+static NSDictionary *(*orig_NSURL_resourceValuesForKeys_error)(id, SEL, NSArray *, NSError **) = NULL;
 
 static NSString *px_UIDevice_name(id self, SEL _cmd) {
     NSString *value = PXSnapshotString(@"DeviceName");
@@ -491,6 +651,26 @@ static unsigned long long px_NSProcessInfo_physicalMemory(id self, SEL _cmd) {
     return value > 0 ? value : (orig_NSProcessInfo_physicalMemory ? orig_NSProcessInfo_physicalMemory(self, _cmd) : 0);
 }
 
+static NSTimeInterval px_NSProcessInfo_systemUptime(id self, SEL _cmd) {
+    NSTimeInterval value = gEnableDeviceMetricsHook ? PXSnapshotUptime() : 0;
+    PXRecordHookCall(@"metrics", @"NSProcessInfo.systemUptime", value > 0 ? [@(value) stringValue] : @"", value > 0, value > 0);
+    return value > 0 ? value : (orig_NSProcessInfo_systemUptime ? orig_NSProcessInfo_systemUptime(self, _cmd) : 0);
+}
+
+static float px_UIDevice_batteryLevel(id self, SEL _cmd) {
+    double value = gEnableDeviceMetricsHook ? PXSnapshotDouble(@"BatteryLevel") : 0;
+    BOOL valid = value >= 0.01 && value <= 1.0;
+    PXRecordHookCall(@"metrics", @"UIDevice.batteryLevel", valid ? [@(value) stringValue] : @"", valid, valid);
+    return valid ? (float)value : (orig_UIDevice_batteryLevel ? orig_UIDevice_batteryLevel(self, _cmd) : -1.0f);
+}
+
+static NSInteger px_UIDevice_batteryState(id self, SEL _cmd) {
+    double value = gEnableDeviceMetricsHook ? PXSnapshotDouble(@"BatteryLevel") : 0;
+    BOOL valid = value >= 0.01 && value <= 1.0;
+    PXRecordHookCall(@"metrics", @"UIDevice.batteryState", valid ? @"1" : @"", valid, valid);
+    return valid ? 1 : (orig_UIDevice_batteryState ? orig_UIDevice_batteryState(self, _cmd) : 0);
+}
+
 static CGRect px_UIScreen_bounds(id self, SEL _cmd) {
     CGSize viewport = gEnableDeviceMetricsHook ? PXSnapshotSize(@"ViewportResolution") : CGSizeZero;
     if (viewport.width > 0 && viewport.height > 0) {
@@ -523,6 +703,69 @@ static CGFloat px_UIScreen_nativeScale(id self, SEL _cmd) {
     return value > 0 ? (CGFloat)value : (orig_UIScreen_nativeScale ? orig_UIScreen_nativeScale(self, _cmd) : 1.0);
 }
 
+static NSDictionary *px_NSFileManager_attributesOfFileSystemForPath_error(id self, SEL _cmd, NSString *path, NSError **error) {
+    NSDictionary *original = orig_NSFileManager_attributesOfFileSystemForPath_error ? orig_NSFileManager_attributesOfFileSystemForPath_error(self, _cmd, path, error) : nil;
+    uint64_t total = gEnableDeviceMetricsHook ? PXSnapshotStorageBytes(@"TotalStorage") : 0;
+    uint64_t free = gEnableDeviceMetricsHook ? PXSnapshotStorageBytes(@"FreeStorage") : 0;
+    if (!original || (total == 0 && free == 0)) {
+        PXRecordHookCall(@"storage", @"NSFileManager.attributesOfFileSystemForPath", @"", NO, NO);
+        return original;
+    }
+    NSMutableDictionary *modified = [original mutableCopy];
+    if (total > 0) modified[NSFileSystemSize] = @(total);
+    if (free > 0) modified[NSFileSystemFreeSize] = @(free);
+    PXRecordHookCall(@"storage", @"NSFileManager.attributesOfFileSystemForPath", [NSString stringWithFormat:@"total=%llu free=%llu", (unsigned long long)total, (unsigned long long)free], YES, YES);
+    return modified;
+}
+
+static unsigned long long px_NSFileManager_volumeAvailableCapacityForImportantUsageForURL_error(id self, SEL _cmd, NSURL *url, NSError **error) {
+    uint64_t free = gEnableDeviceMetricsHook ? PXSnapshotStorageBytes(@"FreeStorage") : 0;
+    PXRecordHookCall(@"storage", @"NSFileManager.volumeAvailableCapacityForImportantUsageForURL", free > 0 ? [@(free) stringValue] : @"", free > 0, free > 0);
+    return free > 0 ? free : (orig_NSFileManager_volumeAvailableCapacityForImportantUsageForURL_error ? orig_NSFileManager_volumeAvailableCapacityForImportantUsageForURL_error(self, _cmd, url, error) : 0);
+}
+
+static unsigned long long px_NSFileManager_volumeAvailableCapacityForOpportunisticUsageForURL_error(id self, SEL _cmd, NSURL *url, NSError **error) {
+    uint64_t free = gEnableDeviceMetricsHook ? PXSnapshotStorageBytes(@"FreeStorage") : 0;
+    uint64_t opportunistic = free > 0 ? (uint64_t)((double)free * 0.9) : 0;
+    PXRecordHookCall(@"storage", @"NSFileManager.volumeAvailableCapacityForOpportunisticUsageForURL", opportunistic > 0 ? [@(opportunistic) stringValue] : @"", opportunistic > 0, opportunistic > 0);
+    return opportunistic > 0 ? opportunistic : (orig_NSFileManager_volumeAvailableCapacityForOpportunisticUsageForURL_error ? orig_NSFileManager_volumeAvailableCapacityForOpportunisticUsageForURL_error(self, _cmd, url, error) : 0);
+}
+
+static unsigned long long px_NSFileManager_volumeTotalCapacityForURL_error(id self, SEL _cmd, NSURL *url, NSError **error) {
+    uint64_t total = gEnableDeviceMetricsHook ? PXSnapshotStorageBytes(@"TotalStorage") : 0;
+    PXRecordHookCall(@"storage", @"NSFileManager.volumeTotalCapacityForURL", total > 0 ? [@(total) stringValue] : @"", total > 0, total > 0);
+    return total > 0 ? total : (orig_NSFileManager_volumeTotalCapacityForURL_error ? orig_NSFileManager_volumeTotalCapacityForURL_error(self, _cmd, url, error) : 0);
+}
+
+static BOOL px_NSURL_getResourceValue_forKey_error(id self, SEL _cmd, id *value, NSString *key, NSError **error) {
+    BOOL result = orig_NSURL_getResourceValue_forKey_error ? orig_NSURL_getResourceValue_forKey_error(self, _cmd, value, key, error) : NO;
+    uint64_t total = gEnableDeviceMetricsHook ? PXSnapshotStorageBytes(@"TotalStorage") : 0;
+    uint64_t free = gEnableDeviceMetricsHook ? PXSnapshotStorageBytes(@"FreeStorage") : 0;
+    if (result && value && key.length) {
+        if ([key isEqualToString:NSURLVolumeTotalCapacityKey] && total > 0) *value = @(total);
+        else if ([key isEqualToString:NSURLVolumeAvailableCapacityKey] && free > 0) *value = @(free);
+        else if ([key isEqualToString:@"NSURLVolumeAvailableCapacityForImportantUsageKey"] && free > 0) *value = @(free);
+        else if ([key isEqualToString:@"NSURLVolumeAvailableCapacityForOpportunisticUsageKey"] && free > 0) *value = @((uint64_t)((double)free * 0.9));
+        else return result;
+        PXRecordHookCall(@"storage", @"NSURL.getResourceValue", [NSString stringWithFormat:@"%@=%@", key, *value ?: @""], YES, YES);
+    }
+    return result;
+}
+
+static NSDictionary *px_NSURL_resourceValuesForKeys_error(id self, SEL _cmd, NSArray *keys, NSError **error) {
+    NSDictionary *original = orig_NSURL_resourceValuesForKeys_error ? orig_NSURL_resourceValuesForKeys_error(self, _cmd, keys, error) : nil;
+    uint64_t total = gEnableDeviceMetricsHook ? PXSnapshotStorageBytes(@"TotalStorage") : 0;
+    uint64_t free = gEnableDeviceMetricsHook ? PXSnapshotStorageBytes(@"FreeStorage") : 0;
+    if (!original || !keys.count || (total == 0 && free == 0)) return original;
+    NSMutableDictionary *modified = [original mutableCopy];
+    if ([keys containsObject:NSURLVolumeTotalCapacityKey] && total > 0) modified[NSURLVolumeTotalCapacityKey] = @(total);
+    if ([keys containsObject:NSURLVolumeAvailableCapacityKey] && free > 0) modified[NSURLVolumeAvailableCapacityKey] = @(free);
+    if ([keys containsObject:@"NSURLVolumeAvailableCapacityForImportantUsageKey"] && free > 0) modified[@"NSURLVolumeAvailableCapacityForImportantUsageKey"] = @(free);
+    if ([keys containsObject:@"NSURLVolumeAvailableCapacityForOpportunisticUsageKey"] && free > 0) modified[@"NSURLVolumeAvailableCapacityForOpportunisticUsageKey"] = @((uint64_t)((double)free * 0.9));
+    PXRecordHookCall(@"storage", @"NSURL.resourceValuesForKeys", [NSString stringWithFormat:@"total=%llu free=%llu", (unsigned long long)total, (unsigned long long)free], YES, YES);
+    return modified;
+}
+
 static void PXInstallObjCHooks(void) {
     Class device = objc_getClass("UIDevice");
     PXReplaceInstanceMethod(device, @selector(name), (IMP)px_UIDevice_name, (IMP *)&orig_UIDevice_name);
@@ -540,12 +783,25 @@ static void PXInstallObjCHooks(void) {
         PXReplaceInstanceMethod(processInfo, @selector(processorCount), (IMP)px_NSProcessInfo_processorCount, (IMP *)&orig_NSProcessInfo_processorCount);
         PXReplaceInstanceMethod(processInfo, @selector(activeProcessorCount), (IMP)px_NSProcessInfo_activeProcessorCount, (IMP *)&orig_NSProcessInfo_activeProcessorCount);
         PXReplaceInstanceMethod(processInfo, @selector(physicalMemory), (IMP)px_NSProcessInfo_physicalMemory, (IMP *)&orig_NSProcessInfo_physicalMemory);
+        PXReplaceInstanceMethod(processInfo, @selector(systemUptime), (IMP)px_NSProcessInfo_systemUptime, (IMP *)&orig_NSProcessInfo_systemUptime);
+        PXReplaceInstanceMethod(device, @selector(batteryLevel), (IMP)px_UIDevice_batteryLevel, (IMP *)&orig_UIDevice_batteryLevel);
+        PXReplaceInstanceMethod(device, @selector(batteryState), (IMP)px_UIDevice_batteryState, (IMP *)&orig_UIDevice_batteryState);
 
         Class screen = objc_getClass("UIScreen");
         PXReplaceInstanceMethod(screen, @selector(bounds), (IMP)px_UIScreen_bounds, (IMP *)&orig_UIScreen_bounds);
         PXReplaceInstanceMethod(screen, @selector(nativeBounds), (IMP)px_UIScreen_nativeBounds, (IMP *)&orig_UIScreen_nativeBounds);
         PXReplaceInstanceMethod(screen, @selector(scale), (IMP)px_UIScreen_scale, (IMP *)&orig_UIScreen_scale);
         PXReplaceInstanceMethod(screen, @selector(nativeScale), (IMP)px_UIScreen_nativeScale, (IMP *)&orig_UIScreen_nativeScale);
+
+        Class fileManager = objc_getClass("NSFileManager");
+        PXReplaceInstanceMethod(fileManager, @selector(attributesOfFileSystemForPath:error:), (IMP)px_NSFileManager_attributesOfFileSystemForPath_error, (IMP *)&orig_NSFileManager_attributesOfFileSystemForPath_error);
+        PXReplaceInstanceMethod(fileManager, @selector(volumeAvailableCapacityForImportantUsageForURL:error:), (IMP)px_NSFileManager_volumeAvailableCapacityForImportantUsageForURL_error, (IMP *)&orig_NSFileManager_volumeAvailableCapacityForImportantUsageForURL_error);
+        PXReplaceInstanceMethod(fileManager, @selector(volumeAvailableCapacityForOpportunisticUsageForURL:error:), (IMP)px_NSFileManager_volumeAvailableCapacityForOpportunisticUsageForURL_error, (IMP *)&orig_NSFileManager_volumeAvailableCapacityForOpportunisticUsageForURL_error);
+        PXReplaceInstanceMethod(fileManager, @selector(volumeTotalCapacityForURL:error:), (IMP)px_NSFileManager_volumeTotalCapacityForURL_error, (IMP *)&orig_NSFileManager_volumeTotalCapacityForURL_error);
+
+        Class url = objc_getClass("NSURL");
+        PXReplaceInstanceMethod(url, @selector(getResourceValue:forKey:error:), (IMP)px_NSURL_getResourceValue_forKey_error, (IMP *)&orig_NSURL_getResourceValue_forKey_error);
+        PXReplaceInstanceMethod(url, @selector(resourceValuesForKeys:error:), (IMP)px_NSURL_resourceValuesForKeys_error, (IMP *)&orig_NSURL_resourceValuesForKeys_error);
     }
 }
 
@@ -767,11 +1023,19 @@ static void *PXCallOrigDlsym(void *handle, const char *symbol) {
 
 static int px_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
     if (gCHooksReady && gEnableSysctlByNameHook && name && !newp && newlen == 0) {
+        if (strcmp(name, "kern.boottime") == 0) {
+            struct timeval boot = {0};
+            BOOL copied = PXSnapshotBootTimeval(&boot) && PXCopyTimevalToSysctlBuffer(boot, oldp, oldlenp);
+            PXRecordHookCall(@"sysctlbyname", @"kern.boottime", copied ? [NSString stringWithFormat:@"%lld", (long long)boot.tv_sec] : @"", copied, copied);
+            if (copied) return 0;
+        }
         BOOL isUInt64 = NO;
         NSString *metricsValue = PXMetricsValueForSysctlName(name, &isUInt64);
         if (metricsValue.length) {
             BOOL copied = NO;
-            if (isUInt64) {
+            if (PXMetricsSysctlNameIsString(name)) {
+                copied = PXCopyCStringToSysctlBuffer(metricsValue, oldp, oldlenp);
+            } else if (isUInt64 || PXMetricsSysctlNameIsUInt64(name)) {
                 copied = PXCopyUInt64ToSysctlBuffer((uint64_t)metricsValue.longLongValue, oldp, oldlenp);
             } else {
                 copied = PXCopyUInt32ToSysctlBuffer((uint32_t)metricsValue.longLongValue, oldp, oldlenp);
@@ -797,10 +1061,16 @@ static int px_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void
         NSString *sysctlName = nil;
         NSString *value = PXValueForSysctlMIB(name, namelen, &sysctlName);
         if (sysctlName.length) {
+            if ([sysctlName isEqualToString:@"kern.boottime"]) {
+                struct timeval boot = {0};
+                BOOL copied = PXSnapshotBootTimeval(&boot) && PXCopyTimevalToSysctlBuffer(boot, oldp, oldlenp);
+                PXRecordHookCall(@"sysctl", sysctlName, copied ? [NSString stringWithFormat:@"%lld", (long long)boot.tv_sec] : @"", copied, copied);
+                if (copied) return 0;
+            }
             if (value.length) {
                 BOOL copied = NO;
-                BOOL metricsInteger = [sysctlName isEqualToString:@"hw.ncpu"] || [sysctlName isEqualToString:@"hw.activecpu"] || [sysctlName isEqualToString:@"hw.memsize"];
-                if ([sysctlName isEqualToString:@"hw.memsize"]) {
+                BOOL metricsInteger = [sysctlName isEqualToString:@"hw.ncpu"] || [sysctlName isEqualToString:@"hw.activecpu"] || [sysctlName isEqualToString:@"hw.physicalcpu"] || [sysctlName isEqualToString:@"hw.logicalcpu"] || [sysctlName isEqualToString:@"hw.memsize"] || [sysctlName isEqualToString:@"hw.physmem"];
+                if ([sysctlName isEqualToString:@"hw.memsize"] || [sysctlName isEqualToString:@"hw.physmem"]) {
                     copied = PXCopyUInt64ToSysctlBuffer((uint64_t)value.longLongValue, oldp, oldlenp);
                 } else if (metricsInteger) {
                     copied = PXCopyUInt32ToSysctlBuffer((uint32_t)value.longLongValue, oldp, oldlenp);
