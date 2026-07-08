@@ -6,11 +6,14 @@
 #import <dlfcn.h>
 #import <errno.h>
 #import <mach-o/dyld.h>
+#import <mach-o/arch.h>
 #import <mach-o/loader.h>
 #import <mach-o/nlist.h>
 #import <mach/mach.h>
+#import <mach/mach_host.h>
 #import <stdarg.h>
 #import <string.h>
+#import <sys/mount.h>
 #import <sys/sysctl.h>
 #import <sys/time.h>
 #import <sys/utsname.h>
@@ -37,6 +40,8 @@ static NSUInteger gUnameImagesScanned = 0;
 static NSUInteger gUnameSymbolsPatched = 0;
 static NSUInteger gDlsymImagesScanned = 0;
 static NSUInteger gDlsymSymbolsPatched = 0;
+static NSUInteger gDeviceMetricsImagesScanned = 0;
+static NSUInteger gDeviceMetricsSymbolsPatched = 0;
 
 static id PXSnapshotObject(NSString *key) {
     id value = gSnapshot[key];
@@ -364,6 +369,31 @@ static BOOL PXSnapshotBootTimeval(struct timeval *outValue) {
     outValue->tv_sec = (time_t)boot;
     outValue->tv_usec = 0;
     return YES;
+}
+
+static BOOL PXShouldSpoofFilesystemPath(const char *path) {
+    if (!path) return NO;
+    return strcmp(path, "/") == 0 || strcmp(path, "/var") == 0 || strcmp(path, "/private/var") == 0 || strncmp(path, "/var/mobile", 11) == 0 || strncmp(path, "/private/var/mobile", 19) == 0;
+}
+
+static void PXApplyStatfsSpoof(struct statfs *value) {
+    if (!value || !gEnableDeviceMetricsHook) return;
+    uint64_t total = PXSnapshotStorageBytes(@"TotalStorage");
+    uint64_t free = PXSnapshotStorageBytes(@"FreeStorage");
+    if (total == 0 && free == 0) return;
+    uint32_t blockSize = value->f_bsize > 0 ? (uint32_t)value->f_bsize : 4096;
+    if (total > 0) value->f_blocks = total / blockSize;
+    if (free > 0) {
+        value->f_bfree = free / blockSize;
+        value->f_bavail = value->f_bfree;
+    }
+}
+
+static void PXMemoryDistribution(uint64_t total, uint64_t *freeOut, uint64_t *wiredOut, uint64_t *activeOut, uint64_t *inactiveOut) {
+    if (freeOut) *freeOut = (uint64_t)((double)total * 0.35);
+    if (wiredOut) *wiredOut = (uint64_t)((double)total * 0.20);
+    if (activeOut) *activeOut = (uint64_t)((double)total * 0.30);
+    if (inactiveOut) *inactiveOut = total - (freeOut ? *freeOut : 0) - (wiredOut ? *wiredOut : 0) - (activeOut ? *activeOut : 0);
 }
 
 static NSUInteger PXSnapshotUnsignedInteger(NSString *key) {
@@ -811,10 +841,20 @@ static int (*orig_uname)(struct utsname *) = NULL;
 static void *(*orig_dlsym)(void *, const char *) = NULL;
 static CFTypeRef (*orig_MGCopyAnswer)(CFStringRef) = NULL;
 static CFTypeRef (*orig_MGCopyAnswerWithError)(CFStringRef, int *) = NULL;
+static int (*orig_statfs)(const char *, struct statfs *) = NULL;
+static int (*orig_getfsstat)(struct statfs *, int, int) = NULL;
+static kern_return_t (*orig_host_statistics64)(host_t, host_flavor_t, host_info64_t, mach_msg_type_number_t *) = NULL;
+static kern_return_t (*orig_host_info)(host_t, host_flavor_t, host_info_t, mach_msg_type_number_t *) = NULL;
+static const NXArchInfo *(*orig_NXGetLocalArchInfo)(void) = NULL;
 
 static int px_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
 static int px_uname(struct utsname *value);
 static void *px_dlsym(void *handle, const char *symbol);
+static int px_statfs(const char *path, struct statfs *buf);
+static int px_getfsstat(struct statfs *buf, int bufsize, int flags);
+static kern_return_t px_host_statistics64(host_t host, host_flavor_t flavor, host_info64_t info, mach_msg_type_number_t *count);
+static kern_return_t px_host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_number_t *count);
+static const NXArchInfo *px_NXGetLocalArchInfo(void);
 
 static CFTypeRef PXCopyRetainedString(NSString *value) {
     return value.length ? CFBridgingRetain(value) : NULL;
@@ -1001,6 +1041,24 @@ static void PXRebindDlsym(void) {
     PXRecordHookCall(@"rebind-summary", @"dlsym", [NSString stringWithFormat:@"images=%lu patched=%lu", (unsigned long)gDlsymImagesScanned, (unsigned long)gDlsymSymbolsPatched], gDlsymSymbolsPatched > 0, gDlsymSymbolsPatched > 0);
 }
 
+static void PXRebindDeviceMetrics(void) {
+    NSString *bundlePath = PXNormalizePath([[NSBundle mainBundle] bundlePath]);
+    uint32_t count = _dyld_image_count();
+    for (uint32_t i = 0; i < count; i++) {
+        const char *imageName = _dyld_get_image_name(i);
+        NSString *path = imageName ? PXNormalizePath([NSString stringWithUTF8String:imageName]) : @"";
+        if (!PXShouldRebindImagePath(path, bundlePath)) continue;
+        gDeviceMetricsImagesScanned++;
+        const struct mach_header_64 *header = (const struct mach_header_64 *)_dyld_get_image_header(i);
+        gDeviceMetricsSymbolsPatched += PXRebindSymbolInImage(header, "_statfs", (const void *)px_statfs, (void **)&orig_statfs);
+        gDeviceMetricsSymbolsPatched += PXRebindSymbolInImage(header, "_getfsstat", (const void *)px_getfsstat, (void **)&orig_getfsstat);
+        gDeviceMetricsSymbolsPatched += PXRebindSymbolInImage(header, "_host_statistics64", (const void *)px_host_statistics64, (void **)&orig_host_statistics64);
+        gDeviceMetricsSymbolsPatched += PXRebindSymbolInImage(header, "_host_info", (const void *)px_host_info, (void **)&orig_host_info);
+        gDeviceMetricsSymbolsPatched += PXRebindSymbolInImage(header, "_NXGetLocalArchInfo", (const void *)px_NXGetLocalArchInfo, (void **)&orig_NXGetLocalArchInfo);
+    }
+    PXRecordHookCall(@"rebind-summary", @"device-metrics-c", [NSString stringWithFormat:@"images=%lu patched=%lu", (unsigned long)gDeviceMetricsImagesScanned, (unsigned long)gDeviceMetricsSymbolsPatched], gDeviceMetricsSymbolsPatched > 0, gDeviceMetricsSymbolsPatched > 0);
+}
+
 static int PXCallOrigSysctlByName(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
     if (!orig_sysctlbyname) orig_sysctlbyname = dlsym(RTLD_NEXT, "sysctlbyname");
     return orig_sysctlbyname ? orig_sysctlbyname(name, oldp, oldlenp, newp, newlen) : -1;
@@ -1102,6 +1160,84 @@ static int px_uname(struct utsname *value) {
     return result;
 }
 
+static int px_statfs(const char *path, struct statfs *buf) {
+    if (!orig_statfs) orig_statfs = dlsym(RTLD_NEXT, "statfs");
+    int result = orig_statfs ? orig_statfs(path, buf) : -1;
+    if (result == 0 && gCHooksReady && gEnableDeviceMetricsHook && PXShouldSpoofFilesystemPath(path)) {
+        PXApplyStatfsSpoof(buf);
+        PXRecordHookCall(@"storage-c", @"statfs", path ? [NSString stringWithUTF8String:path] ?: @"" : @"", YES, YES);
+    }
+    return result;
+}
+
+static int px_getfsstat(struct statfs *buf, int bufsize, int flags) {
+    if (!orig_getfsstat) orig_getfsstat = dlsym(RTLD_NEXT, "getfsstat");
+    int result = orig_getfsstat ? orig_getfsstat(buf, bufsize, flags) : -1;
+    if (result > 0 && gCHooksReady && gEnableDeviceMetricsHook && buf && bufsize > 0) {
+        for (int i = 0; i < result; i++) {
+            if (PXShouldSpoofFilesystemPath(buf[i].f_mntonname)) PXApplyStatfsSpoof(&buf[i]);
+        }
+        PXRecordHookCall(@"storage-c", @"getfsstat", [NSString stringWithFormat:@"filesystems=%d", result], YES, YES);
+    }
+    return result;
+}
+
+static kern_return_t px_host_statistics64(host_t host, host_flavor_t flavor, host_info64_t info, mach_msg_type_number_t *count) {
+    if (!orig_host_statistics64) orig_host_statistics64 = dlsym(RTLD_NEXT, "host_statistics64");
+    kern_return_t result = orig_host_statistics64 ? orig_host_statistics64(host, flavor, info, count) : KERN_FAILURE;
+    if (result != KERN_SUCCESS || !gCHooksReady || !gEnableDeviceMetricsHook || !info || !count) return result;
+    uint64_t total = (uint64_t)PXSnapshotUnsignedInteger(@"DeviceMemory") * 1024ULL * 1024ULL * 1024ULL;
+    if (total == 0) return result;
+    if (flavor == HOST_VM_INFO64 && *count >= HOST_VM_INFO64_COUNT) {
+        vm_statistics64_data_t *stats = (vm_statistics64_data_t *)info;
+        uint64_t freeBytes = 0, wiredBytes = 0, activeBytes = 0, inactiveBytes = 0;
+        PXMemoryDistribution(total, &freeBytes, &wiredBytes, &activeBytes, &inactiveBytes);
+        vm_size_t pageSize = 4096;
+        host_page_size(host, &pageSize);
+        if (pageSize == 0) pageSize = 4096;
+        stats->free_count = (natural_t)(freeBytes / pageSize);
+        stats->wire_count = (natural_t)(wiredBytes / pageSize);
+        stats->active_count = (natural_t)(activeBytes / pageSize);
+        stats->inactive_count = (natural_t)(inactiveBytes / pageSize);
+        PXRecordHookCall(@"host", @"host_statistics64.HOST_VM_INFO64", [NSString stringWithFormat:@"total=%llu", (unsigned long long)total], YES, YES);
+    }
+    return result;
+}
+
+static kern_return_t px_host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_number_t *count) {
+    if (!orig_host_info) orig_host_info = dlsym(RTLD_NEXT, "host_info");
+    kern_return_t result = orig_host_info ? orig_host_info(host, flavor, info, count) : KERN_FAILURE;
+    if (result != KERN_SUCCESS || !gCHooksReady || !gEnableDeviceMetricsHook || !info || !count) return result;
+    NSUInteger cores = PXSnapshotUnsignedInteger(@"CPUCoreCount");
+    uint64_t total = (uint64_t)PXSnapshotUnsignedInteger(@"DeviceMemory") * 1024ULL * 1024ULL * 1024ULL;
+    if (flavor == HOST_BASIC_INFO && *count >= HOST_BASIC_INFO_COUNT) {
+        host_basic_info_t basic = (host_basic_info_t)info;
+        if (total > 0) basic->max_mem = total;
+        if (cores > 0) {
+            basic->avail_cpus = (integer_t)cores;
+            basic->max_cpus = (integer_t)cores;
+        }
+        PXRecordHookCall(@"host", @"host_info.HOST_BASIC_INFO", [NSString stringWithFormat:@"cores=%lu total=%llu", (unsigned long)cores, (unsigned long long)total], YES, YES);
+    }
+    return result;
+}
+
+static const NXArchInfo *px_NXGetLocalArchInfo(void) {
+    if (!orig_NXGetLocalArchInfo) orig_NXGetLocalArchInfo = dlsym(RTLD_NEXT, "NXGetLocalArchInfo");
+    const NXArchInfo *original = orig_NXGetLocalArchInfo ? orig_NXGetLocalArchInfo() : NULL;
+    if (!gCHooksReady || !gEnableDeviceMetricsHook || !original) return original;
+    NSString *architecture = PXSnapshotString(@"CPUArchitecture");
+    if (!architecture.length) return original;
+    static NXArchInfo custom;
+    custom = *original;
+    custom.cpusubtype = (cpu_subtype_t)PXCPUSubtypeForArchitecture(architecture);
+    if ([architecture containsString:@"M1"]) custom.description = "arm64v8 Apple M1";
+    else if ([architecture containsString:@"M2"]) custom.description = "arm64v8 Apple M2";
+    else if ([architecture containsString:@"A11"] || [architecture containsString:@"A12"] || [architecture containsString:@"A13"] || [architecture containsString:@"A14"] || [architecture containsString:@"A15"] || [architecture containsString:@"A16"] || [architecture containsString:@"A17"] || [architecture containsString:@"A18"]) custom.description = "ARM64E";
+    PXRecordHookCall(@"host", @"NXGetLocalArchInfo", architecture, YES, YES);
+    return &custom;
+}
+
 static void *px_dlsym(void *handle, const char *symbol) {
     if (gCHooksReady && gEnableDlsymHook && symbol) {
         NSString *name = [NSString stringWithUTF8String:symbol] ?: @"";
@@ -1124,6 +1260,26 @@ static void *px_dlsym(void *handle, const char *symbol) {
         if ([name isEqualToString:@"sysctlbyname"] && gEnableSysctlByNameHook) {
             PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
             return (void *)px_sysctlbyname;
+        }
+        if ([name isEqualToString:@"statfs"] && gEnableDeviceMetricsHook) {
+            PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
+            return (void *)px_statfs;
+        }
+        if ([name isEqualToString:@"getfsstat"] && gEnableDeviceMetricsHook) {
+            PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
+            return (void *)px_getfsstat;
+        }
+        if ([name isEqualToString:@"host_statistics64"] && gEnableDeviceMetricsHook) {
+            PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
+            return (void *)px_host_statistics64;
+        }
+        if ([name isEqualToString:@"host_info"] && gEnableDeviceMetricsHook) {
+            PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
+            return (void *)px_host_info;
+        }
+        if ([name isEqualToString:@"NXGetLocalArchInfo"] && gEnableDeviceMetricsHook) {
+            PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
+            return (void *)px_NXGetLocalArchInfo;
         }
     }
     return PXCallOrigDlsym(handle, symbol);
@@ -1158,6 +1314,9 @@ static void PXInstallCHooks(void) {
     }
     if (gEnableDlsymHook) {
         PXRebindDlsym();
+    }
+    if (gEnableDeviceMetricsHook) {
+        PXRebindDeviceMetrics();
     }
     if (gEnableMobileGestaltHook) {
         PXRebindMobileGestalt();
