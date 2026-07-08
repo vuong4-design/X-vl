@@ -97,6 +97,11 @@ static NSString *PXRTTargetLocalMarkerPath(NSString *bundleID) {
     return dir.length ? [dir stringByAppendingPathComponent:@"loaded_marker.plist"] : nil;
 }
 
+static NSString *PXRTTargetLocalEarlyMarkerPath(NSString *bundleID) {
+    NSString *dir = PXRTTargetLocalDirectory(bundleID);
+    return dir.length ? [dir stringByAppendingPathComponent:@"early_marker.txt"] : nil;
+}
+
 static NSString *PXRTTargetLocalHookStatsPath(NSString *bundleID) {
     NSString *dir = PXRTTargetLocalDirectory(bundleID);
     return dir.length ? [dir stringByAppendingPathComponent:@"hook_stats.plist"] : nil;
@@ -275,6 +280,7 @@ static NSString *PXRTTargetLocalHookStatsPath(NSString *bundleID) {
     NSString *markerPath = [self loadedMarkerPathForBundleID:bundleID ?: @""];
     NSString *targetSnapshotPath = PXRTTargetLocalSnapshotPath(bundleID ?: @"") ?: @"";
     NSString *targetMarkerPath = PXRTTargetLocalMarkerPath(bundleID ?: @"") ?: @"";
+    NSString *targetEarlyMarkerPath = PXRTTargetLocalEarlyMarkerPath(bundleID ?: @"") ?: @"";
     NSString *targetHookStatsPath = PXRTTargetLocalHookStatsPath(bundleID ?: @"") ?: @"";
     NSString *dylibPath = [self bundledInjectDylibPath];
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -301,6 +307,8 @@ static NSString *PXRTTargetLocalHookStatsPath(NSString *bundleID) {
         @"targetMarkerPath": targetMarkerPath ?: @"",
         @"targetMarkerExists": [fm fileExistsAtPath:targetMarkerPath] ? @"YES" : @"NO",
         @"targetMarker": targetMarker,
+        @"targetEarlyMarkerPath": targetEarlyMarkerPath ?: @"",
+        @"targetEarlyMarkerExists": [fm fileExistsAtPath:targetEarlyMarkerPath] ? @"YES" : @"NO",
         @"targetHookStatsPath": targetHookStatsPath ?: @"",
         @"targetHookStatsExists": [fm fileExistsAtPath:targetHookStatsPath] ? @"YES" : @"NO",
         @"targetHookStats": targetHookStats,

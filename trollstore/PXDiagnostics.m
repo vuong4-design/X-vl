@@ -691,6 +691,8 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     info[@"injectionLoaded"] = ([runtimeStatus[@"markerExists"] isEqual:@"YES"] || [runtimeStatus[@"targetMarkerExists"] isEqual:@"YES"]) ? @"YES" : @"NO";
     info[@"markerPath"] = runtimeStatus[@"markerPath"] ?: @"";
     info[@"targetMarkerPath"] = runtimeStatus[@"targetMarkerPath"] ?: @"";
+    info[@"targetEarlyMarkerExists"] = runtimeStatus[@"targetEarlyMarkerExists"] ?: @"NO";
+    info[@"targetEarlyMarkerPath"] = runtimeStatus[@"targetEarlyMarkerPath"] ?: @"";
     info[@"targetDylibExists"] = patchStatus[@"targetDylibExists"] ?: @"";
     info[@"installedCarrierHasLoadCommand"] = patchStatus[@"installedCarrierHasLoadCommand"] ?: @"";
     info[@"targetHookStatsExists"] = runtimeStatus[@"targetHookStatsExists"] ?: @"NO";

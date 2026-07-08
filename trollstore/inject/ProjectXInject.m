@@ -6,6 +6,8 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 #import <errno.h>
+#import <fcntl.h>
+#import <limits.h>
 #import <mach-o/dyld.h>
 #import <mach-o/arch.h>
 #import <mach-o/loader.h>
@@ -24,7 +26,9 @@
 #import <sys/sockio.h>
 #import <sys/sysctl.h>
 #import <sys/time.h>
+#import <sys/stat.h>
 #import <sys/utsname.h>
+#import <unistd.h>
 
 static NSString *const PXInjectBaseDir = @"/var/mobile/Library/ProjectXTroll";
 static NSString *const PXInjectDylibVersion = @"0.1.0";
@@ -57,6 +61,20 @@ static NSUInteger gNetworkImagesScanned = 0;
 static NSUInteger gNetworkSymbolsPatched = 0;
 static NSUInteger gSysctlByNameImagesScanned = 0;
 static NSUInteger gSysctlByNameSymbolsPatched = 0;
+
+static void PXWriteEarlyMarker(void) {
+    const char *home = getenv("HOME");
+    if (!home || !home[0]) return;
+    char path[PATH_MAX] = {0};
+    snprintf(path, sizeof(path), "%s/Library/ProjectX", home);
+    mkdir(path, 0755);
+    strlcat(path, "/early_marker.txt", sizeof(path));
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return;
+    const char *message = "ProjectXInject early constructor reached\n";
+    write(fd, message, strlen(message));
+    close(fd);
+}
 
 static id PXSnapshotObject(NSString *key) {
     id value = gSnapshot[key];
@@ -1770,6 +1788,7 @@ static void PXInstallCHooks(void) {
 
 __attribute__((constructor))
 static void ProjectXInjectInit(void) {
+    PXWriteEarlyMarker();
     @autoreleasepool {
         PXLoadSnapshot();
         gEnableDeviceMetricsHook = PXSnapshotBool(@"EnableDeviceMetricsHook", NO);
