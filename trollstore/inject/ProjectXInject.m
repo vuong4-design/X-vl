@@ -42,6 +42,8 @@ static NSUInteger gDlsymImagesScanned = 0;
 static NSUInteger gDlsymSymbolsPatched = 0;
 static NSUInteger gDeviceMetricsImagesScanned = 0;
 static NSUInteger gDeviceMetricsSymbolsPatched = 0;
+static NSUInteger gNetworkImagesScanned = 0;
+static NSUInteger gNetworkSymbolsPatched = 0;
 
 static id PXSnapshotObject(NSString *key) {
     id value = gSnapshot[key];
@@ -396,6 +398,21 @@ static void PXMemoryDistribution(uint64_t total, uint64_t *freeOut, uint64_t *wi
     if (inactiveOut) *inactiveOut = total - (freeOut ? *freeOut : 0) - (wiredOut ? *wiredOut : 0) - (activeOut ? *activeOut : 0);
 }
 
+static BOOL PXHasNetworkSnapshot(void) {
+    return PXSnapshotString(@"SSID").length > 0 || PXSnapshotString(@"BSSID").length > 0 || PXSnapshotString(@"CarrierName").length > 0 || PXSnapshotString(@"CarrierMCC").length > 0 || PXSnapshotString(@"CarrierMNC").length > 0;
+}
+
+static NSDictionary *PXWiFiNetworkInfo(void) {
+    NSString *ssid = PXSnapshotString(@"SSID");
+    NSString *bssid = PXSnapshotString(@"BSSID");
+    if (!ssid.length && !bssid.length) return nil;
+    NSMutableDictionary *info = [NSMutableDictionary dictionary];
+    if (ssid.length) info[@"SSID"] = ssid;
+    if (bssid.length) info[@"BSSID"] = bssid;
+    if (ssid.length) info[@"SSIDDATA"] = [ssid dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data];
+    return info;
+}
+
 static NSUInteger PXSnapshotUnsignedInteger(NSString *key) {
     id value = PXSnapshotObject(key);
     if ([value isKindOfClass:[NSNumber class]]) return [(NSNumber *)value unsignedIntegerValue];
@@ -608,6 +625,13 @@ static unsigned long long (*orig_NSFileManager_volumeAvailableCapacityForOpportu
 static unsigned long long (*orig_NSFileManager_volumeTotalCapacityForURL_error)(id, SEL, NSURL *, NSError **) = NULL;
 static BOOL (*orig_NSURL_getResourceValue_forKey_error)(id, SEL, id *, NSString *, NSError **) = NULL;
 static NSDictionary *(*orig_NSURL_resourceValuesForKeys_error)(id, SEL, NSArray *, NSError **) = NULL;
+static id (*orig_CTTelephonyNetworkInfo_subscriberCellularProvider)(id, SEL) = NULL;
+static id (*orig_CTTelephonyNetworkInfo_serviceSubscriberCellularProviders)(id, SEL) = NULL;
+static NSString *(*orig_CTCarrier_carrierName)(id, SEL) = NULL;
+static NSString *(*orig_CTCarrier_mobileCountryCode)(id, SEL) = NULL;
+static NSString *(*orig_CTCarrier_mobileNetworkCode)(id, SEL) = NULL;
+static NSString *(*orig_CTCarrier_isoCountryCode)(id, SEL) = NULL;
+static BOOL (*orig_CTCarrier_allowsVOIP)(id, SEL) = NULL;
 
 static NSString *px_UIDevice_name(id self, SEL _cmd) {
     NSString *value = PXSnapshotString(@"DeviceName");
@@ -644,6 +668,51 @@ static NSUUID *px_UIDevice_identifierForVendor(id self, SEL _cmd) {
     NSUUID *uuid = value.length ? [[NSUUID alloc] initWithUUIDString:value] : nil;
     PXRecordHookCall(@"objc", @"UIDevice.identifierForVendor", value ?: @"", uuid != nil, uuid != nil);
     return uuid ?: (orig_UIDevice_identifierForVendor ? orig_UIDevice_identifierForVendor(self, _cmd) : nil);
+}
+
+static id px_CTTelephonyNetworkInfo_subscriberCellularProvider(id self, SEL _cmd) {
+    id provider = orig_CTTelephonyNetworkInfo_subscriberCellularProvider ? orig_CTTelephonyNetworkInfo_subscriberCellularProvider(self, _cmd) : nil;
+    BOOL active = PXHasNetworkSnapshot();
+    PXRecordHookCall(@"network", @"CTTelephonyNetworkInfo.subscriberCellularProvider", active ? @"provider" : @"", active, active);
+    return provider;
+}
+
+static id px_CTTelephonyNetworkInfo_serviceSubscriberCellularProviders(id self, SEL _cmd) {
+    id providers = orig_CTTelephonyNetworkInfo_serviceSubscriberCellularProviders ? orig_CTTelephonyNetworkInfo_serviceSubscriberCellularProviders(self, _cmd) : nil;
+    BOOL active = PXHasNetworkSnapshot();
+    PXRecordHookCall(@"network", @"CTTelephonyNetworkInfo.serviceSubscriberCellularProviders", active ? @"providers" : @"", active, active);
+    return providers;
+}
+
+static NSString *px_CTCarrier_carrierName(id self, SEL _cmd) {
+    NSString *value = PXSnapshotString(@"CarrierName");
+    PXRecordHookCall(@"network", @"CTCarrier.carrierName", value ?: @"", value.length > 0, value.length > 0);
+    return value ?: (orig_CTCarrier_carrierName ? orig_CTCarrier_carrierName(self, _cmd) : nil);
+}
+
+static NSString *px_CTCarrier_mobileCountryCode(id self, SEL _cmd) {
+    NSString *value = PXSnapshotString(@"CarrierMCC");
+    PXRecordHookCall(@"network", @"CTCarrier.mobileCountryCode", value ?: @"", value.length > 0, value.length > 0);
+    return value ?: (orig_CTCarrier_mobileCountryCode ? orig_CTCarrier_mobileCountryCode(self, _cmd) : nil);
+}
+
+static NSString *px_CTCarrier_mobileNetworkCode(id self, SEL _cmd) {
+    NSString *value = PXSnapshotString(@"CarrierMNC");
+    PXRecordHookCall(@"network", @"CTCarrier.mobileNetworkCode", value ?: @"", value.length > 0, value.length > 0);
+    return value ?: (orig_CTCarrier_mobileNetworkCode ? orig_CTCarrier_mobileNetworkCode(self, _cmd) : nil);
+}
+
+static NSString *px_CTCarrier_isoCountryCode(id self, SEL _cmd) {
+    NSString *mcc = PXSnapshotString(@"CarrierMCC");
+    NSString *value = [mcc isEqualToString:@"452"] ? @"vn" : nil;
+    PXRecordHookCall(@"network", @"CTCarrier.isoCountryCode", value ?: @"", value.length > 0, value.length > 0);
+    return value ?: (orig_CTCarrier_isoCountryCode ? orig_CTCarrier_isoCountryCode(self, _cmd) : nil);
+}
+
+static BOOL px_CTCarrier_allowsVOIP(id self, SEL _cmd) {
+    BOOL active = PXHasNetworkSnapshot();
+    PXRecordHookCall(@"network", @"CTCarrier.allowsVOIP", active ? @"1" : @"", active, active);
+    return active ? YES : (orig_CTCarrier_allowsVOIP ? orig_CTCarrier_allowsVOIP(self, _cmd) : YES);
 }
 
 static NSString *px_NSProcessInfo_operatingSystemVersionString(id self, SEL _cmd) {
@@ -832,6 +901,17 @@ static void PXInstallObjCHooks(void) {
         Class url = objc_getClass("NSURL");
         PXReplaceInstanceMethod(url, @selector(getResourceValue:forKey:error:), (IMP)px_NSURL_getResourceValue_forKey_error, (IMP *)&orig_NSURL_getResourceValue_forKey_error);
         PXReplaceInstanceMethod(url, @selector(resourceValuesForKeys:error:), (IMP)px_NSURL_resourceValuesForKeys_error, (IMP *)&orig_NSURL_resourceValuesForKeys_error);
+
+        Class telephony = NSClassFromString(@"CTTelephonyNetworkInfo");
+        PXReplaceInstanceMethod(telephony, NSSelectorFromString(@"subscriberCellularProvider"), (IMP)px_CTTelephonyNetworkInfo_subscriberCellularProvider, (IMP *)&orig_CTTelephonyNetworkInfo_subscriberCellularProvider);
+        PXReplaceInstanceMethod(telephony, NSSelectorFromString(@"serviceSubscriberCellularProviders"), (IMP)px_CTTelephonyNetworkInfo_serviceSubscriberCellularProviders, (IMP *)&orig_CTTelephonyNetworkInfo_serviceSubscriberCellularProviders);
+
+        Class carrier = NSClassFromString(@"CTCarrier");
+        PXReplaceInstanceMethod(carrier, NSSelectorFromString(@"carrierName"), (IMP)px_CTCarrier_carrierName, (IMP *)&orig_CTCarrier_carrierName);
+        PXReplaceInstanceMethod(carrier, NSSelectorFromString(@"mobileCountryCode"), (IMP)px_CTCarrier_mobileCountryCode, (IMP *)&orig_CTCarrier_mobileCountryCode);
+        PXReplaceInstanceMethod(carrier, NSSelectorFromString(@"mobileNetworkCode"), (IMP)px_CTCarrier_mobileNetworkCode, (IMP *)&orig_CTCarrier_mobileNetworkCode);
+        PXReplaceInstanceMethod(carrier, NSSelectorFromString(@"isoCountryCode"), (IMP)px_CTCarrier_isoCountryCode, (IMP *)&orig_CTCarrier_isoCountryCode);
+        PXReplaceInstanceMethod(carrier, NSSelectorFromString(@"allowsVOIP"), (IMP)px_CTCarrier_allowsVOIP, (IMP *)&orig_CTCarrier_allowsVOIP);
     }
 }
 
@@ -841,6 +921,8 @@ static int (*orig_uname)(struct utsname *) = NULL;
 static void *(*orig_dlsym)(void *, const char *) = NULL;
 static CFTypeRef (*orig_MGCopyAnswer)(CFStringRef) = NULL;
 static CFTypeRef (*orig_MGCopyAnswerWithError)(CFStringRef, int *) = NULL;
+static CFArrayRef (*orig_CNCopySupportedInterfaces)(void) = NULL;
+static CFDictionaryRef (*orig_CNCopyCurrentNetworkInfo)(CFStringRef) = NULL;
 static int (*orig_statfs)(const char *, struct statfs *) = NULL;
 static int (*orig_getfsstat)(struct statfs *, int, int) = NULL;
 static kern_return_t (*orig_host_statistics64)(host_t, host_flavor_t, host_info64_t, mach_msg_type_number_t *) = NULL;
@@ -850,6 +932,8 @@ static const NXArchInfo *(*orig_NXGetLocalArchInfo)(void) = NULL;
 static int px_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
 static int px_uname(struct utsname *value);
 static void *px_dlsym(void *handle, const char *symbol);
+static CFArrayRef px_CNCopySupportedInterfaces(void);
+static CFDictionaryRef px_CNCopyCurrentNetworkInfo(CFStringRef interfaceName);
 static int px_statfs(const char *path, struct statfs *buf);
 static int px_getfsstat(struct statfs *buf, int bufsize, int flags);
 static kern_return_t px_host_statistics64(host_t host, host_flavor_t flavor, host_info64_t info, mach_msg_type_number_t *count);
@@ -1059,6 +1143,21 @@ static void PXRebindDeviceMetrics(void) {
     PXRecordHookCall(@"rebind-summary", @"device-metrics-c", [NSString stringWithFormat:@"images=%lu patched=%lu", (unsigned long)gDeviceMetricsImagesScanned, (unsigned long)gDeviceMetricsSymbolsPatched], gDeviceMetricsSymbolsPatched > 0, gDeviceMetricsSymbolsPatched > 0);
 }
 
+static void PXRebindNetwork(void) {
+    NSString *bundlePath = PXNormalizePath([[NSBundle mainBundle] bundlePath]);
+    uint32_t count = _dyld_image_count();
+    for (uint32_t i = 0; i < count; i++) {
+        const char *imageName = _dyld_get_image_name(i);
+        NSString *path = imageName ? PXNormalizePath([NSString stringWithUTF8String:imageName]) : @"";
+        if (!PXShouldRebindImagePath(path, bundlePath)) continue;
+        gNetworkImagesScanned++;
+        const struct mach_header_64 *header = (const struct mach_header_64 *)_dyld_get_image_header(i);
+        gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_CNCopySupportedInterfaces", (const void *)px_CNCopySupportedInterfaces, (void **)&orig_CNCopySupportedInterfaces);
+        gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_CNCopyCurrentNetworkInfo", (const void *)px_CNCopyCurrentNetworkInfo, (void **)&orig_CNCopyCurrentNetworkInfo);
+    }
+    PXRecordHookCall(@"rebind-summary", @"network-c", [NSString stringWithFormat:@"images=%lu patched=%lu", (unsigned long)gNetworkImagesScanned, (unsigned long)gNetworkSymbolsPatched], gNetworkSymbolsPatched > 0, gNetworkSymbolsPatched > 0);
+}
+
 static int PXCallOrigSysctlByName(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
     if (!orig_sysctlbyname) orig_sysctlbyname = dlsym(RTLD_NEXT, "sysctlbyname");
     return orig_sysctlbyname ? orig_sysctlbyname(name, oldp, oldlenp, newp, newlen) : -1;
@@ -1238,6 +1337,27 @@ static const NXArchInfo *px_NXGetLocalArchInfo(void) {
     return &custom;
 }
 
+static CFArrayRef px_CNCopySupportedInterfaces(void) {
+    NSDictionary *network = PXWiFiNetworkInfo();
+    if (gCHooksReady && gEnableDeviceMetricsHook && network.count) {
+        PXRecordHookCall(@"network-c", @"CNCopySupportedInterfaces", @"en0", YES, YES);
+        return CFBridgingRetain(@[@"en0"]);
+    }
+    if (!orig_CNCopySupportedInterfaces) orig_CNCopySupportedInterfaces = dlsym(RTLD_NEXT, "CNCopySupportedInterfaces");
+    return orig_CNCopySupportedInterfaces ? orig_CNCopySupportedInterfaces() : NULL;
+}
+
+static CFDictionaryRef px_CNCopyCurrentNetworkInfo(CFStringRef interfaceName) {
+    NSDictionary *network = PXWiFiNetworkInfo();
+    if (gCHooksReady && gEnableDeviceMetricsHook && network.count) {
+        NSString *iface = interfaceName ? (__bridge NSString *)interfaceName : @"";
+        PXRecordHookCall(@"network-c", @"CNCopyCurrentNetworkInfo", [NSString stringWithFormat:@"%@ %@", iface ?: @"", network[@"SSID"] ?: @""], YES, YES);
+        return CFBridgingRetain(network);
+    }
+    if (!orig_CNCopyCurrentNetworkInfo) orig_CNCopyCurrentNetworkInfo = dlsym(RTLD_NEXT, "CNCopyCurrentNetworkInfo");
+    return orig_CNCopyCurrentNetworkInfo ? orig_CNCopyCurrentNetworkInfo(interfaceName) : NULL;
+}
+
 static void *px_dlsym(void *handle, const char *symbol) {
     if (gCHooksReady && gEnableDlsymHook && symbol) {
         NSString *name = [NSString stringWithUTF8String:symbol] ?: @"";
@@ -1281,6 +1401,14 @@ static void *px_dlsym(void *handle, const char *symbol) {
             PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
             return (void *)px_NXGetLocalArchInfo;
         }
+        if ([name isEqualToString:@"CNCopySupportedInterfaces"] && gEnableDeviceMetricsHook) {
+            PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
+            return (void *)px_CNCopySupportedInterfaces;
+        }
+        if ([name isEqualToString:@"CNCopyCurrentNetworkInfo"] && gEnableDeviceMetricsHook) {
+            PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
+            return (void *)px_CNCopyCurrentNetworkInfo;
+        }
     }
     return PXCallOrigDlsym(handle, symbol);
 }
@@ -1317,6 +1445,7 @@ static void PXInstallCHooks(void) {
     }
     if (gEnableDeviceMetricsHook) {
         PXRebindDeviceMetrics();
+        PXRebindNetwork();
     }
     if (gEnableMobileGestaltHook) {
         PXRebindMobileGestalt();
