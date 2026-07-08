@@ -688,11 +688,27 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     info[@"patch"] = patchStatus;
     info[@"markerExists"] = runtimeStatus[@"markerExists"] ?: @"NO";
     info[@"targetMarkerExists"] = runtimeStatus[@"targetMarkerExists"] ?: @"NO";
-    info[@"injectionLoaded"] = ([runtimeStatus[@"markerExists"] isEqual:@"YES"] || [runtimeStatus[@"targetMarkerExists"] isEqual:@"YES"]) ? @"YES" : @"NO";
     info[@"markerPath"] = runtimeStatus[@"markerPath"] ?: @"";
     info[@"targetMarkerPath"] = runtimeStatus[@"targetMarkerPath"] ?: @"";
     info[@"targetEarlyMarkerExists"] = runtimeStatus[@"targetEarlyMarkerExists"] ?: @"NO";
     info[@"targetEarlyMarkerPath"] = runtimeStatus[@"targetEarlyMarkerPath"] ?: @"";
+    BOOL globalMarker = [runtimeStatus[@"markerExists"] isEqual:@"YES"];
+    BOOL targetMarker = [runtimeStatus[@"targetMarkerExists"] isEqual:@"YES"];
+    BOOL earlyMarker = [runtimeStatus[@"targetEarlyMarkerExists"] isEqual:@"YES"];
+    info[@"injectionLoaded"] = (globalMarker || targetMarker || earlyMarker) ? @"YES" : @"NO";
+    if (targetMarker) {
+        info[@"injectionLoadedReason"] = @"target-marker";
+        info[@"injectionStatusNote"] = @"Target marker exists; injected dylib loaded and completed marker initialization.";
+    } else if (earlyMarker) {
+        info[@"injectionLoadedReason"] = @"early-marker";
+        info[@"injectionStatusNote"] = @"Early marker exists; injected dylib reached its constructor before full marker initialization.";
+    } else if (globalMarker) {
+        info[@"injectionLoadedReason"] = @"global-marker";
+        info[@"injectionStatusNote"] = @"Global marker exists; target-local marker may be unavailable because of sandbox or data-container resolution.";
+    } else {
+        info[@"injectionLoadedReason"] = @"none";
+        info[@"injectionStatusNote"] = @"No marker was found; the dylib may not have loaded, or the target may have exited before constructor marker writes.";
+    }
     info[@"targetDylibExists"] = patchStatus[@"targetDylibExists"] ?: @"";
     info[@"installedCarrierHasLoadCommand"] = patchStatus[@"installedCarrierHasLoadCommand"] ?: @"";
     info[@"targetHookStatsExists"] = runtimeStatus[@"targetHookStatsExists"] ?: @"NO";
