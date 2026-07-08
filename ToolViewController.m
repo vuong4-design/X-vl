@@ -591,6 +591,14 @@
             });
         });
     }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Apply Runtime Snapshot Only" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSDictionary *result = [PXDiagnostics applyRuntimeSnapshotOnlyForBundleID:@"com.finalwire.aida64"];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                showResult(@"Apply Runtime Snapshot", result);
+            });
+        });
+    }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Enable ObjC Hooks Snapshot" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             NSDictionary *result = [PXDiagnostics enableObjCHooksSnapshotForBundleID:@"com.finalwire.aida64"];
@@ -620,6 +628,30 @@
             NSDictionary *result = [PXDiagnostics enableDeviceMetricsHookSnapshotForBundleID:@"com.finalwire.aida64"];
             dispatch_async(dispatch_get_main_queue(), ^{
                 showResult(@"Enable Metrics Hook", result);
+            });
+        });
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Enable Network Hook" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSDictionary *result = [PXDiagnostics enableNetworkHookSnapshotForBundleID:@"com.finalwire.aida64"];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                showResult(@"Enable Network Hook", result);
+            });
+        });
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Enable Carrier Hook" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSDictionary *result = [PXDiagnostics enableCarrierHookSnapshotForBundleID:@"com.finalwire.aida64"];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                showResult(@"Enable Carrier Hook", result);
+            });
+        });
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Enable Private Wi-Fi Hook" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSDictionary *result = [PXDiagnostics enablePrivateWiFiHookSnapshotForBundleID:@"com.finalwire.aida64"];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                showResult(@"Enable Private Wi-Fi", result);
             });
         });
     }]];

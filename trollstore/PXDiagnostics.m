@@ -7,6 +7,7 @@
 #import "PXRootHelper.h"
 #import "PXRuntimeSnapshot.h"
 #import "PXShellRouter.h"
+#import "common/PXProcessKiller.h"
 
 #import <UIKit/UIKit.h>
 #import <sys/stat.h>
@@ -19,6 +20,83 @@ static NSString *PXDiagString(id obj) {
     if (!obj) return @"(nil)";
     if ([obj isKindOfClass:[NSString class]]) return obj;
     return [obj description];
+}
+
+static BOOL PXDiagBoolValue(id value) {
+    if ([value isKindOfClass:[NSNumber class]]) return [value boolValue];
+    if ([value isKindOfClass:[NSString class]]) {
+        NSString *lower = [(NSString *)value lowercaseString];
+        return [lower isEqualToString:@"yes"] || [lower isEqualToString:@"true"] || [lower isEqualToString:@"1"];
+    }
+    return NO;
+}
+
+static NSDictionary<NSString *, id> *PXDiagDefaultRuntimeOptions(void) {
+    return @{ @"CHookTestMode": @"runtime-snapshot",
+              @"EnableSysctlByNameHook": @YES,
+                                                                             @"EnableSysctlHook": @YES,
+                                                                             @"EnableUnameHook": @YES,
+                                                                             @"EnableDlsymHook": @NO,
+                                                                             @"EnableDeviceMetricsHook": @NO,
+                                                                             @"EnableNetworkHook": @NO,
+                                                                             @"EnableCarrierHook": @NO,
+                                                                             @"EnablePrivateWiFiHook": @NO,
+                                                                             @"EnableMobileGestaltHook": @YES,
+              @"EnableSysctlName_hw.machine": @YES,
+              @"EnableSysctlName_hw.model": @YES,
+              @"EnableSysctlName_kern.osversion": @YES,
+              @"EnableSysctlName_kern.version": @YES };
+}
+
+static NSMutableDictionary<NSString *, id> *PXDiagRuntimeOptionsForBundleID(NSString *bundleID) {
+    NSDictionary *status = [PXRuntimeSnapshot statusForBundleID:bundleID ?: @""] ?: @{};
+    NSDictionary *snapshot = status[@"targetSnapshot"];
+    if (![snapshot isKindOfClass:[NSDictionary class]] || !snapshot.count) snapshot = status[@"snapshot"];
+    if (![snapshot isKindOfClass:[NSDictionary class]]) snapshot = @{};
+
+    NSMutableDictionary *options = [NSMutableDictionary dictionaryWithDictionary:PXDiagDefaultRuntimeOptions()];
+    NSArray<NSString *> *keys = @[
+        @"CHookTestMode",
+        @"EnableSysctlByNameHook",
+        @"EnableSysctlHook",
+        @"EnableUnameHook",
+        @"EnableDlsymHook",
+        @"EnableDeviceMetricsHook",
+        @"EnableNetworkHook",
+        @"EnableCarrierHook",
+        @"EnablePrivateWiFiHook",
+        @"EnableMobileGestaltHook",
+        @"EnableSysctlName_hw.machine",
+        @"EnableSysctlName_hw.model",
+        @"EnableSysctlName_kern.osversion",
+        @"EnableSysctlName_kern.version"
+    ];
+    for (NSString *key in keys) {
+        id value = snapshot[key];
+        if (value) options[key] = value;
+    }
+    if (!snapshot[@"EnableNetworkHook"] && PXDiagBoolValue(snapshot[@"EnableDeviceMetricsHook"])) options[@"EnableNetworkHook"] = @YES;
+    if (!snapshot[@"EnableCarrierHook"] && PXDiagBoolValue(snapshot[@"EnableDeviceMetricsHook"])) options[@"EnableCarrierHook"] = @YES;
+    if (![options[@"CHookTestMode"] isKindOfClass:[NSString class]] || ![options[@"CHookTestMode"] length]) {
+        options[@"CHookTestMode"] = @"runtime-snapshot";
+    }
+    return options;
+}
+
+static void PXDiagAddSnapshotFlags(NSMutableDictionary *info, NSDictionary *snapshot) {
+    NSArray<NSString *> *keys = @[
+        @"EnableObjCHooks",
+        @"EnableCHooks",
+        @"CHookTestMode",
+        @"EnableSysctlHook",
+        @"EnableUnameHook",
+        @"EnableDlsymHook",
+        @"EnableDeviceMetricsHook",
+        @"EnableNetworkHook",
+        @"EnableCarrierHook",
+        @"EnablePrivateWiFiHook"
+    ];
+    for (NSString *key in keys) info[key] = snapshot[key] ?: @"";
 }
 
 @implementation PXDiagnostics
@@ -262,10 +340,13 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
                                                               cHookOptions:@{@"CHookTestMode": @"sysctlbyname-safe",
                                                                              @"EnableSysctlByNameHook": @YES,
                                                                              @"EnableSysctlHook": @YES,
-                                                                             @"EnableUnameHook": @YES,
-                                                                             @"EnableDlsymHook": @NO,
-                                                                             @"EnableDeviceMetricsHook": @NO,
-                                                                             @"EnableMobileGestaltHook": @YES,
+                                                                              @"EnableUnameHook": @YES,
+                                                                              @"EnableDlsymHook": @NO,
+                                                                              @"EnableDeviceMetricsHook": @NO,
+                                                                              @"EnableNetworkHook": @NO,
+                                                                              @"EnableCarrierHook": @NO,
+                                                                              @"EnablePrivateWiFiHook": @NO,
+                                                                              @"EnableMobileGestaltHook": @YES,
                                                                              @"EnableSysctlName_hw.machine": @YES,
                                                                              @"EnableSysctlName_hw.model": @YES,
                                                                              @"EnableSysctlName_kern.osversion": @YES,
@@ -275,13 +356,7 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     NSMutableDictionary *info = [NSMutableDictionary dictionaryWithDictionary:status ?: @{}];
     info[@"exportOK"] = snapshot ? @"YES" : @"NO";
     info[@"exportError"] = err.localizedDescription ?: @"";
-    info[@"EnableObjCHooks"] = snapshot[@"EnableObjCHooks"] ?: @"";
-    info[@"EnableCHooks"] = snapshot[@"EnableCHooks"] ?: @"";
-    info[@"CHookTestMode"] = snapshot[@"CHookTestMode"] ?: @"";
-    info[@"EnableSysctlHook"] = snapshot[@"EnableSysctlHook"] ?: @"";
-    info[@"EnableUnameHook"] = snapshot[@"EnableUnameHook"] ?: @"";
-    info[@"EnableDlsymHook"] = snapshot[@"EnableDlsymHook"] ?: @"";
-    info[@"EnableDeviceMetricsHook"] = snapshot[@"EnableDeviceMetricsHook"] ?: @"";
+    PXDiagAddSnapshotFlags(info, snapshot ?: @{});
     info[@"note"] = @"ObjC, safe sysctlbyname, and bundle-local sysctl/uname rebind will be active on next target launch. Dlsym is diagnostic-only. Reopen the target app, then check Injection Marker Status.";
     [self log:@"[inject] c hooks snapshot status=%@", info];
     return info;
@@ -300,6 +375,9 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
                                                                              @"EnableUnameHook": @YES,
                                                                              @"EnableDlsymHook": @YES,
                                                                              @"EnableDeviceMetricsHook": @NO,
+                                                                             @"EnableNetworkHook": @NO,
+                                                                             @"EnableCarrierHook": @NO,
+                                                                             @"EnablePrivateWiFiHook": @NO,
                                                                              @"EnableMobileGestaltHook": @YES,
                                                                              @"EnableSysctlName_hw.machine": @YES,
                                                                              @"EnableSysctlName_hw.model": @YES,
@@ -310,13 +388,7 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     NSMutableDictionary *info = [NSMutableDictionary dictionaryWithDictionary:status ?: @{}];
     info[@"exportOK"] = snapshot ? @"YES" : @"NO";
     info[@"exportError"] = err.localizedDescription ?: @"";
-    info[@"EnableObjCHooks"] = snapshot[@"EnableObjCHooks"] ?: @"";
-    info[@"EnableCHooks"] = snapshot[@"EnableCHooks"] ?: @"";
-    info[@"CHookTestMode"] = snapshot[@"CHookTestMode"] ?: @"";
-    info[@"EnableSysctlHook"] = snapshot[@"EnableSysctlHook"] ?: @"";
-    info[@"EnableUnameHook"] = snapshot[@"EnableUnameHook"] ?: @"";
-    info[@"EnableDlsymHook"] = snapshot[@"EnableDlsymHook"] ?: @"";
-    info[@"EnableDeviceMetricsHook"] = snapshot[@"EnableDeviceMetricsHook"] ?: @"";
+    PXDiagAddSnapshotFlags(info, snapshot ?: @{});
     info[@"note"] = @"Dlsym diagnostic hook will be active on next target launch. Use only if model spoofing regresses or MobileGestalt/dynamic lookup needs investigation.";
     [self log:@"[inject] dlsym hook snapshot status=%@", info];
     return info;
@@ -335,6 +407,9 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
                                                                              @"EnableUnameHook": @YES,
                                                                              @"EnableDlsymHook": @NO,
                                                                              @"EnableDeviceMetricsHook": @YES,
+                                                                             @"EnableNetworkHook": @NO,
+                                                                             @"EnableCarrierHook": @NO,
+                                                                             @"EnablePrivateWiFiHook": @NO,
                                                                              @"EnableMobileGestaltHook": @YES,
                                                                              @"EnableSysctlName_hw.machine": @YES,
                                                                              @"EnableSysctlName_hw.model": @YES,
@@ -345,15 +420,102 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     NSMutableDictionary *info = [NSMutableDictionary dictionaryWithDictionary:status ?: @{}];
     info[@"exportOK"] = snapshot ? @"YES" : @"NO";
     info[@"exportError"] = err.localizedDescription ?: @"";
-    info[@"EnableObjCHooks"] = snapshot[@"EnableObjCHooks"] ?: @"";
-    info[@"EnableCHooks"] = snapshot[@"EnableCHooks"] ?: @"";
-    info[@"CHookTestMode"] = snapshot[@"CHookTestMode"] ?: @"";
-    info[@"EnableSysctlHook"] = snapshot[@"EnableSysctlHook"] ?: @"";
-    info[@"EnableUnameHook"] = snapshot[@"EnableUnameHook"] ?: @"";
-    info[@"EnableDlsymHook"] = snapshot[@"EnableDlsymHook"] ?: @"";
-    info[@"EnableDeviceMetricsHook"] = snapshot[@"EnableDeviceMetricsHook"] ?: @"";
+    PXDiagAddSnapshotFlags(info, snapshot ?: @{});
     info[@"note"] = @"Device metrics hooks will be active on next target launch for CPU cores, memory, and screen metrics. Reopen AIDA64, visit device/display pages, then check Injection Marker Status.";
     [self log:@"[inject] device metrics hook snapshot status=%@", info];
+    return info;
+}
+
++ (NSDictionary<NSString *,id> *)enableNetworkHookSnapshotForBundleID:(NSString *)bundleID {
+    NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
+    [self log:@"[inject] enabling network hook snapshot bundleID=%@", targetBundleID];
+    NSMutableDictionary *options = PXDiagRuntimeOptionsForBundleID(targetBundleID);
+    options[@"CHookTestMode"] = @"network-diagnostic";
+    options[@"EnableSysctlByNameHook"] = @YES;
+    options[@"EnableSysctlHook"] = @YES;
+    options[@"EnableUnameHook"] = @YES;
+    options[@"EnableDlsymHook"] = @NO;
+    options[@"EnableNetworkHook"] = @YES;
+    NSError *err = nil;
+    NSDictionary *snapshot = [PXRuntimeSnapshot exportSnapshotForBundleID:targetBundleID enableObjCHooks:YES enableCHooks:YES cHookOptions:options error:&err];
+    NSDictionary *status = [PXRuntimeSnapshot statusForBundleID:targetBundleID];
+    NSMutableDictionary *info = [NSMutableDictionary dictionaryWithDictionary:status ?: @{}];
+    info[@"exportOK"] = snapshot ? @"YES" : @"NO";
+    info[@"exportError"] = err.localizedDescription ?: @"";
+    PXDiagAddSnapshotFlags(info, snapshot ?: @{});
+    info[@"note"] = @"Network hooks will be active on next target launch without enabling screen/device metrics. Reopen the target app, then check Injection Marker Status.";
+    [self log:@"[inject] network hook snapshot status=%@", info];
+    return info;
+}
+
++ (NSDictionary<NSString *,id> *)enableCarrierHookSnapshotForBundleID:(NSString *)bundleID {
+    NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
+    [self log:@"[inject] enabling carrier hook snapshot bundleID=%@", targetBundleID];
+    NSMutableDictionary *options = PXDiagRuntimeOptionsForBundleID(targetBundleID);
+    options[@"CHookTestMode"] = @"carrier-diagnostic";
+    options[@"EnableSysctlByNameHook"] = @YES;
+    options[@"EnableSysctlHook"] = @YES;
+    options[@"EnableUnameHook"] = @YES;
+    options[@"EnableDlsymHook"] = @NO;
+    options[@"EnableCarrierHook"] = @YES;
+    NSError *err = nil;
+    NSDictionary *snapshot = [PXRuntimeSnapshot exportSnapshotForBundleID:targetBundleID enableObjCHooks:YES enableCHooks:YES cHookOptions:options error:&err];
+    NSDictionary *status = [PXRuntimeSnapshot statusForBundleID:targetBundleID];
+    NSMutableDictionary *info = [NSMutableDictionary dictionaryWithDictionary:status ?: @{}];
+    info[@"exportOK"] = snapshot ? @"YES" : @"NO";
+    info[@"exportError"] = err.localizedDescription ?: @"";
+    PXDiagAddSnapshotFlags(info, snapshot ?: @{});
+    info[@"note"] = @"Carrier hooks will be active on next target launch without enabling screen/device metrics. Reopen the target app, then check Injection Marker Status.";
+    [self log:@"[inject] carrier hook snapshot status=%@", info];
+    return info;
+}
+
++ (NSDictionary<NSString *,id> *)enablePrivateWiFiHookSnapshotForBundleID:(NSString *)bundleID {
+    NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
+    [self log:@"[inject] enabling private wifi hook snapshot bundleID=%@", targetBundleID];
+    NSMutableDictionary *options = PXDiagRuntimeOptionsForBundleID(targetBundleID);
+    options[@"CHookTestMode"] = @"private-wifi-diagnostic";
+    options[@"EnableSysctlByNameHook"] = @YES;
+    options[@"EnableSysctlHook"] = @YES;
+    options[@"EnableUnameHook"] = @YES;
+    options[@"EnableDlsymHook"] = @NO;
+    options[@"EnableNetworkHook"] = @YES;
+    options[@"EnablePrivateWiFiHook"] = @YES;
+    NSError *err = nil;
+    NSDictionary *snapshot = [PXRuntimeSnapshot exportSnapshotForBundleID:targetBundleID enableObjCHooks:YES enableCHooks:YES cHookOptions:options error:&err];
+    NSDictionary *status = [PXRuntimeSnapshot statusForBundleID:targetBundleID];
+    NSMutableDictionary *info = [NSMutableDictionary dictionaryWithDictionary:status ?: @{}];
+    info[@"exportOK"] = snapshot ? @"YES" : @"NO";
+    info[@"exportError"] = err.localizedDescription ?: @"";
+    PXDiagAddSnapshotFlags(info, snapshot ?: @{});
+    info[@"note"] = @"Private Wi-Fi hooks will be active on next target launch. Keep this diagnostic-only because private framework objects can be app/iOS specific.";
+    [self log:@"[inject] private wifi hook snapshot status=%@", info];
+    return info;
+}
+
++ (NSDictionary<NSString *,id> *)applyRuntimeSnapshotOnlyForBundleID:(NSString *)bundleID {
+    NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
+    [self log:@"[inject] applying runtime snapshot only bundleID=%@", targetBundleID];
+    NSMutableDictionary *options = PXDiagRuntimeOptionsForBundleID(targetBundleID);
+    NSError *err = nil;
+    NSDictionary *snapshot = [PXRuntimeSnapshot exportSnapshotForBundleID:targetBundleID enableObjCHooks:YES enableCHooks:YES cHookOptions:options error:&err];
+    NSDictionary *status = [PXRuntimeSnapshot statusForBundleID:targetBundleID];
+    NSDictionary *patchStatus = [PXInPlacePatcher statusForBundleID:targetBundleID] ?: @{};
+    NSMutableDictionary *info = [NSMutableDictionary dictionaryWithDictionary:status ?: @{}];
+    info[@"patch"] = patchStatus;
+    info[@"exportOK"] = snapshot ? @"YES" : @"NO";
+    info[@"exportError"] = err.localizedDescription ?: @"";
+    PXDiagAddSnapshotFlags(info, snapshot ?: @{});
+    NSDictionary *state = [patchStatus[@"state"] isKindOfClass:[NSDictionary class]] ? patchStatus[@"state"] : nil;
+    NSString *executableName = state[@"executableName"] ?: patchStatus[@"executableName"] ?: @"";
+    BOOL killed = executableName.length ? PXKillallTermThenKill(executableName, 0.5) : NO;
+    BOOL exited = executableName.length ? PXWaitForProcessesToExit(@[executableName], 2.0) : NO;
+    info[@"executableName"] = executableName ?: @"";
+    info[@"targetKillRequested"] = executableName.length ? @"YES" : @"NO";
+    info[@"targetKillSignalSent"] = killed ? @"YES" : @"NO";
+    info[@"targetExited"] = exited ? @"YES" : @"NO";
+    info[@"note"] = @"Runtime snapshot was updated without patching the app binary/carrier. Reopen the target app to load the new profile info.";
+    [self log:@"[inject] runtime snapshot only status=%@", info];
     return info;
 }
 
@@ -426,6 +588,9 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     info[@"targetHookStatsExists"] = runtimeStatus[@"targetHookStatsExists"] ?: @"NO";
     info[@"targetHookStatsPath"] = runtimeStatus[@"targetHookStatsPath"] ?: @"";
     info[@"targetHookStats"] = runtimeStatus[@"targetHookStats"] ?: @{};
+    NSDictionary *targetSnapshot = [runtimeStatus[@"targetSnapshot"] isKindOfClass:[NSDictionary class]] ? runtimeStatus[@"targetSnapshot"] : nil;
+    NSDictionary *snapshot = targetSnapshot.count ? targetSnapshot : ([runtimeStatus[@"snapshot"] isKindOfClass:[NSDictionary class]] ? runtimeStatus[@"snapshot"] : nil);
+    PXDiagAddSnapshotFlags(info, snapshot ?: @{});
     [self log:@"[inject] marker status result=%@", info];
     return info;
 }

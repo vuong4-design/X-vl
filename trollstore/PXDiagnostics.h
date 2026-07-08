@@ -20,6 +20,10 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSDictionary<NSString *, id> *)enableCHooksSnapshotForBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)enableDlsymHookSnapshotForBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)enableDeviceMetricsHookSnapshotForBundleID:(NSString *)bundleID;
++ (NSDictionary<NSString *, id> *)enableNetworkHookSnapshotForBundleID:(NSString *)bundleID;
++ (NSDictionary<NSString *, id> *)enableCarrierHookSnapshotForBundleID:(NSString *)bundleID;
++ (NSDictionary<NSString *, id> *)enablePrivateWiFiHookSnapshotForBundleID:(NSString *)bundleID;
++ (NSDictionary<NSString *, id> *)applyRuntimeSnapshotOnlyForBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)enableCHookTestSnapshotForBundleID:(NSString *)bundleID mode:(NSString *)mode;
 + (NSDictionary<NSString *, id> *)injectionMarkerStatusForBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)dyldLaunchBundleID:(NSString *)bundleID;

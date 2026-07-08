@@ -37,6 +37,9 @@ static BOOL gEnableSysctlHook = NO;
 static BOOL gEnableUnameHook = NO;
 static BOOL gEnableDlsymHook = NO;
 static BOOL gEnableDeviceMetricsHook = NO;
+static BOOL gEnableNetworkHook = NO;
+static BOOL gEnableCarrierHook = NO;
+static BOOL gEnablePrivateWiFiHook = NO;
 static BOOL gEnableMobileGestaltHook = NO;
 static NSMutableDictionary *gHookStats = nil;
 static __thread BOOL gRecordingStats = NO;
@@ -663,6 +666,9 @@ static void PXWriteLoadedMarker(void) {
         @"EnableUnameHook": @(PXSnapshotBool(@"EnableUnameHook", NO)),
         @"EnableDlsymHook": @(PXSnapshotBool(@"EnableDlsymHook", NO)),
         @"EnableDeviceMetricsHook": @(PXSnapshotBool(@"EnableDeviceMetricsHook", NO)),
+        @"EnableNetworkHook": @(PXSnapshotBool(@"EnableNetworkHook", PXSnapshotBool(@"EnableDeviceMetricsHook", NO))),
+        @"EnableCarrierHook": @(PXSnapshotBool(@"EnableCarrierHook", PXSnapshotBool(@"EnableDeviceMetricsHook", NO))),
+        @"EnablePrivateWiFiHook": @(PXSnapshotBool(@"EnablePrivateWiFiHook", NO)),
         @"EnableMobileGestaltHook": @(PXSnapshotBool(@"EnableMobileGestaltHook", NO)),
         @"processID": @([[NSProcessInfo processInfo] processIdentifier]),
         @"hookStatsPath": PXLocalHookStatsPath(),
@@ -988,6 +994,9 @@ static void PXInstallObjCHooks(void) {
         PXReplaceInstanceMethod(url, @selector(getResourceValue:forKey:error:), (IMP)px_NSURL_getResourceValue_forKey_error, (IMP *)&orig_NSURL_getResourceValue_forKey_error);
         PXReplaceInstanceMethod(url, @selector(resourceValuesForKeys:error:), (IMP)px_NSURL_resourceValuesForKeys_error, (IMP *)&orig_NSURL_resourceValuesForKeys_error);
 
+    }
+
+    if (gEnableCarrierHook) {
         Class telephony = NSClassFromString(@"CTTelephonyNetworkInfo");
         PXReplaceInstanceMethod(telephony, NSSelectorFromString(@"subscriberCellularProvider"), (IMP)px_CTTelephonyNetworkInfo_subscriberCellularProvider, (IMP *)&orig_CTTelephonyNetworkInfo_subscriberCellularProvider);
         PXReplaceInstanceMethod(telephony, NSSelectorFromString(@"serviceSubscriberCellularProviders"), (IMP)px_CTTelephonyNetworkInfo_serviceSubscriberCellularProviders, (IMP *)&orig_CTTelephonyNetworkInfo_serviceSubscriberCellularProviders);
@@ -1254,16 +1263,20 @@ static void PXRebindNetwork(void) {
         if (!PXShouldRebindImagePath(path, bundlePath)) continue;
         gNetworkImagesScanned++;
         const struct mach_header_64 *header = (const struct mach_header_64 *)_dyld_get_image_header(i);
-        gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_CNCopySupportedInterfaces", (const void *)px_CNCopySupportedInterfaces, (void **)&orig_CNCopySupportedInterfaces);
-        gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_CNCopyCurrentNetworkInfo", (const void *)px_CNCopyCurrentNetworkInfo, (void **)&orig_CNCopyCurrentNetworkInfo);
-        gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_getifaddrs", (const void *)px_getifaddrs, (void **)&orig_getifaddrs);
-        gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_if_nametoindex", (const void *)px_if_nametoindex, (void **)&orig_if_nametoindex);
-        gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_ioctl", (const void *)px_ioctl, (void **)&orig_ioctl);
-        gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_SCDynamicStoreCopyValue", (const void *)px_SCDynamicStoreCopyValue, (void **)&orig_SCDynamicStoreCopyValue);
-        gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_WiFiManagerClientCopyDevices", (const void *)px_WiFiManagerClientCopyDevices, (void **)&orig_WiFiManagerClientCopyDevices);
-        gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_WiFiDeviceClientCopyCurrentNetwork", (const void *)px_WiFiDeviceClientCopyCurrentNetwork, (void **)&orig_WiFiDeviceClientCopyCurrentNetwork);
-        gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_WiFiNetworkGetSSID", (const void *)px_WiFiNetworkGetSSID, (void **)&orig_WiFiNetworkGetSSID);
-        gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_WiFiNetworkGetBSSID", (const void *)px_WiFiNetworkGetBSSID, (void **)&orig_WiFiNetworkGetBSSID);
+        if (gEnableNetworkHook) {
+            gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_CNCopySupportedInterfaces", (const void *)px_CNCopySupportedInterfaces, (void **)&orig_CNCopySupportedInterfaces);
+            gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_CNCopyCurrentNetworkInfo", (const void *)px_CNCopyCurrentNetworkInfo, (void **)&orig_CNCopyCurrentNetworkInfo);
+            gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_getifaddrs", (const void *)px_getifaddrs, (void **)&orig_getifaddrs);
+            gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_if_nametoindex", (const void *)px_if_nametoindex, (void **)&orig_if_nametoindex);
+            gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_ioctl", (const void *)px_ioctl, (void **)&orig_ioctl);
+            gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_SCDynamicStoreCopyValue", (const void *)px_SCDynamicStoreCopyValue, (void **)&orig_SCDynamicStoreCopyValue);
+        }
+        if (gEnablePrivateWiFiHook) {
+            gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_WiFiManagerClientCopyDevices", (const void *)px_WiFiManagerClientCopyDevices, (void **)&orig_WiFiManagerClientCopyDevices);
+            gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_WiFiDeviceClientCopyCurrentNetwork", (const void *)px_WiFiDeviceClientCopyCurrentNetwork, (void **)&orig_WiFiDeviceClientCopyCurrentNetwork);
+            gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_WiFiNetworkGetSSID", (const void *)px_WiFiNetworkGetSSID, (void **)&orig_WiFiNetworkGetSSID);
+            gNetworkSymbolsPatched += PXRebindSymbolInImage(header, "_WiFiNetworkGetBSSID", (const void *)px_WiFiNetworkGetBSSID, (void **)&orig_WiFiNetworkGetBSSID);
+        }
     }
     PXRecordHookCall(@"rebind-summary", @"network-c", [NSString stringWithFormat:@"images=%lu patched=%lu", (unsigned long)gNetworkImagesScanned, (unsigned long)gNetworkSymbolsPatched], gNetworkSymbolsPatched > 0, gNetworkSymbolsPatched > 0);
 }
@@ -1449,7 +1462,7 @@ static const NXArchInfo *px_NXGetLocalArchInfo(void) {
 
 static CFArrayRef px_CNCopySupportedInterfaces(void) {
     NSDictionary *network = PXWiFiNetworkInfo();
-    if (gCHooksReady && gEnableDeviceMetricsHook && network.count) {
+    if (gCHooksReady && gEnableNetworkHook && network.count) {
         PXRecordHookCall(@"network-c", @"CNCopySupportedInterfaces", @"en0", YES, YES);
         return CFBridgingRetain(@[@"en0"]);
     }
@@ -1459,7 +1472,7 @@ static CFArrayRef px_CNCopySupportedInterfaces(void) {
 
 static CFDictionaryRef px_CNCopyCurrentNetworkInfo(CFStringRef interfaceName) {
     NSDictionary *network = PXWiFiNetworkInfo();
-    if (gCHooksReady && gEnableDeviceMetricsHook && network.count) {
+    if (gCHooksReady && gEnableNetworkHook && network.count) {
         NSString *iface = interfaceName ? (__bridge NSString *)interfaceName : @"";
         PXRecordHookCall(@"network-c", @"CNCopyCurrentNetworkInfo", [NSString stringWithFormat:@"%@ %@ %@", iface ?: @"", network[@"SSID"] ?: @"", network[@"BSSID"] ?: @""], YES, YES);
         return CFBridgingRetain(network);
@@ -1471,7 +1484,7 @@ static CFDictionaryRef px_CNCopyCurrentNetworkInfo(CFStringRef interfaceName) {
 static int px_getifaddrs(struct ifaddrs **interfaces) {
     if (!orig_getifaddrs) orig_getifaddrs = dlsym(RTLD_NEXT, "getifaddrs");
     int result = orig_getifaddrs ? orig_getifaddrs(interfaces) : -1;
-    if (result != 0 || !gCHooksReady || !gEnableDeviceMetricsHook || !interfaces || !*interfaces) return result;
+    if (result != 0 || !gCHooksReady || !gEnableNetworkHook || !interfaces || !*interfaces) return result;
     NSString *ipv4 = PXSnapshotLocalIPv4();
     NSString *ipv6 = PXSnapshotLocalIPv6();
     NSString *mac = PXSnapshotWiFiMAC();
@@ -1498,7 +1511,7 @@ static int px_getifaddrs(struct ifaddrs **interfaces) {
 static unsigned int px_if_nametoindex(const char *name) {
     if (!orig_if_nametoindex) orig_if_nametoindex = dlsym(RTLD_NEXT, "if_nametoindex");
     unsigned int result = orig_if_nametoindex ? orig_if_nametoindex(name) : 0;
-    if (gCHooksReady && gEnableDeviceMetricsHook && name && strcmp(name, "en0") == 0) {
+    if (gCHooksReady && gEnableNetworkHook && name && strcmp(name, "en0") == 0) {
         PXRecordHookCall(@"network-c", @"if_nametoindex", [NSString stringWithFormat:@"en0=%u", result ?: 4], YES, YES);
         return result ?: 4;
     }
@@ -1508,7 +1521,7 @@ static unsigned int px_if_nametoindex(const char *name) {
 static int px_ioctl(int fd, unsigned long request, void *argp) {
     if (!orig_ioctl) orig_ioctl = dlsym(RTLD_NEXT, "ioctl");
     int result = orig_ioctl ? orig_ioctl(fd, request, argp) : -1;
-    if (result != 0 || !gCHooksReady || !gEnableDeviceMetricsHook || !argp) return result;
+    if (result != 0 || !gCHooksReady || !gEnableNetworkHook || !argp) return result;
     struct ifreq *ifr = (struct ifreq *)argp;
     if (strncmp(ifr->ifr_name, "en0", IFNAMSIZ) != 0) return result;
     if (request == SIOCGIFADDR) {
@@ -1530,7 +1543,7 @@ static int px_ioctl(int fd, unsigned long request, void *argp) {
 
 static CFPropertyListRef px_SCDynamicStoreCopyValue(void *store, CFStringRef key) {
     NSString *keyString = key ? (__bridge NSString *)key : @"";
-    if (gCHooksReady && gEnableDeviceMetricsHook && keyString.length) {
+    if (gCHooksReady && gEnableNetworkHook && keyString.length) {
         NSDictionary *wifi = PXWiFiNetworkInfo();
         NSString *ipv4 = PXSnapshotLocalIPv4();
         NSString *ipv6 = PXSnapshotLocalIPv6();
@@ -1554,7 +1567,7 @@ static CFPropertyListRef px_SCDynamicStoreCopyValue(void *store, CFStringRef key
 }
 
 static CFArrayRef px_WiFiManagerClientCopyDevices(void *manager) {
-    if (gCHooksReady && gEnableDeviceMetricsHook && PXWiFiNetworkInfo().count) {
+    if (gCHooksReady && gEnablePrivateWiFiHook && PXWiFiNetworkInfo().count) {
         PXRecordHookCall(@"network-private", @"WiFiManagerClientCopyDevices", @"en0", YES, YES);
         return CFBridgingRetain(@[@"en0"]);
     }
@@ -1563,7 +1576,7 @@ static CFArrayRef px_WiFiManagerClientCopyDevices(void *manager) {
 }
 
 static CFStringRef px_WiFiDeviceClientCopyCurrentNetwork(void *device) {
-    if (gCHooksReady && gEnableDeviceMetricsHook && PXWiFiNetworkInfo().count) {
+    if (gCHooksReady && gEnablePrivateWiFiHook && PXWiFiNetworkInfo().count) {
         PXRecordHookCall(@"network-private", @"WiFiDeviceClientCopyCurrentNetwork", @"ProjectXNetwork", YES, YES);
         return CFBridgingRetain(@"ProjectXNetwork");
     }
@@ -1573,7 +1586,7 @@ static CFStringRef px_WiFiDeviceClientCopyCurrentNetwork(void *device) {
 
 static CFStringRef px_WiFiNetworkGetSSID(void *network) {
     NSString *ssid = PXSnapshotString(@"SSID");
-    if (gCHooksReady && gEnableDeviceMetricsHook && ssid.length) {
+    if (gCHooksReady && gEnablePrivateWiFiHook && ssid.length) {
         PXRecordHookCall(@"network-private", @"WiFiNetworkGetSSID", ssid, YES, YES);
         return (__bridge CFStringRef)ssid;
     }
@@ -1583,7 +1596,7 @@ static CFStringRef px_WiFiNetworkGetSSID(void *network) {
 
 static CFStringRef px_WiFiNetworkGetBSSID(void *network) {
     NSString *bssid = PXSnapshotString(@"BSSID");
-    if (gCHooksReady && gEnableDeviceMetricsHook && bssid.length) {
+    if (gCHooksReady && gEnablePrivateWiFiHook && bssid.length) {
         PXRecordHookCall(@"network-private", @"WiFiNetworkGetBSSID", bssid, YES, YES);
         return (__bridge CFStringRef)bssid;
     }
@@ -1634,43 +1647,43 @@ static void *px_dlsym(void *handle, const char *symbol) {
             PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
             return (void *)px_NXGetLocalArchInfo;
         }
-        if ([name isEqualToString:@"CNCopySupportedInterfaces"] && gEnableDeviceMetricsHook) {
+        if ([name isEqualToString:@"CNCopySupportedInterfaces"] && gEnableNetworkHook) {
             PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
             return (void *)px_CNCopySupportedInterfaces;
         }
-        if ([name isEqualToString:@"CNCopyCurrentNetworkInfo"] && gEnableDeviceMetricsHook) {
+        if ([name isEqualToString:@"CNCopyCurrentNetworkInfo"] && gEnableNetworkHook) {
             PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
             return (void *)px_CNCopyCurrentNetworkInfo;
         }
-        if ([name isEqualToString:@"getifaddrs"] && gEnableDeviceMetricsHook) {
+        if ([name isEqualToString:@"getifaddrs"] && gEnableNetworkHook) {
             PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
             return (void *)px_getifaddrs;
         }
-        if ([name isEqualToString:@"if_nametoindex"] && gEnableDeviceMetricsHook) {
+        if ([name isEqualToString:@"if_nametoindex"] && gEnableNetworkHook) {
             PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
             return (void *)px_if_nametoindex;
         }
-        if ([name isEqualToString:@"ioctl"] && gEnableDeviceMetricsHook) {
+        if ([name isEqualToString:@"ioctl"] && gEnableNetworkHook) {
             PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
             return (void *)px_ioctl;
         }
-        if ([name isEqualToString:@"SCDynamicStoreCopyValue"] && gEnableDeviceMetricsHook) {
+        if ([name isEqualToString:@"SCDynamicStoreCopyValue"] && gEnableNetworkHook) {
             PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
             return (void *)px_SCDynamicStoreCopyValue;
         }
-        if ([name isEqualToString:@"WiFiManagerClientCopyDevices"] && gEnableDeviceMetricsHook) {
+        if ([name isEqualToString:@"WiFiManagerClientCopyDevices"] && gEnablePrivateWiFiHook) {
             PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
             return (void *)px_WiFiManagerClientCopyDevices;
         }
-        if ([name isEqualToString:@"WiFiDeviceClientCopyCurrentNetwork"] && gEnableDeviceMetricsHook) {
+        if ([name isEqualToString:@"WiFiDeviceClientCopyCurrentNetwork"] && gEnablePrivateWiFiHook) {
             PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
             return (void *)px_WiFiDeviceClientCopyCurrentNetwork;
         }
-        if ([name isEqualToString:@"WiFiNetworkGetSSID"] && gEnableDeviceMetricsHook) {
+        if ([name isEqualToString:@"WiFiNetworkGetSSID"] && gEnablePrivateWiFiHook) {
             PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
             return (void *)px_WiFiNetworkGetSSID;
         }
-        if ([name isEqualToString:@"WiFiNetworkGetBSSID"] && gEnableDeviceMetricsHook) {
+        if ([name isEqualToString:@"WiFiNetworkGetBSSID"] && gEnablePrivateWiFiHook) {
             PXRecordHookCall(@"dlsym", name, @"ProjectX replacement", YES, YES);
             return (void *)px_WiFiNetworkGetBSSID;
         }
@@ -1697,6 +1710,9 @@ static void PXInstallCHooks(void) {
     gEnableUnameHook = PXSnapshotBool(@"EnableUnameHook", NO);
     gEnableDlsymHook = PXSnapshotBool(@"EnableDlsymHook", NO);
     gEnableDeviceMetricsHook = PXSnapshotBool(@"EnableDeviceMetricsHook", gEnableDeviceMetricsHook);
+    gEnableNetworkHook = PXSnapshotBool(@"EnableNetworkHook", gEnableDeviceMetricsHook);
+    gEnableCarrierHook = PXSnapshotBool(@"EnableCarrierHook", gEnableDeviceMetricsHook);
+    gEnablePrivateWiFiHook = PXSnapshotBool(@"EnablePrivateWiFiHook", NO);
     gEnableMobileGestaltHook = PXSnapshotBool(@"EnableMobileGestaltHook", NO);
     gCHooksReady = YES;
     if (gEnableSysctlHook) {
@@ -1710,12 +1726,14 @@ static void PXInstallCHooks(void) {
     }
     if (gEnableDeviceMetricsHook) {
         PXRebindDeviceMetrics();
+    }
+    if (gEnableNetworkHook || gEnablePrivateWiFiHook) {
         PXRebindNetwork();
     }
     if (gEnableMobileGestaltHook) {
         PXRebindMobileGestalt();
     }
-    PXInjectLog(@"C hooks enabled mode=%@ sysctlbyname=%p enabled=%@ sysctl=%p enabled=%@ uname=%p enabled=%@ dlsym=%p enabled=%@ metrics=%@ MGCopyAnswer=%p MGCopyAnswerWithError=%p MobileGestalt enabled=%@",
+    PXInjectLog(@"C hooks enabled mode=%@ sysctlbyname=%p enabled=%@ sysctl=%p enabled=%@ uname=%p enabled=%@ dlsym=%p enabled=%@ metrics=%@ network=%@ carrier=%@ privateWiFi=%@ MGCopyAnswer=%p MGCopyAnswerWithError=%p MobileGestalt enabled=%@",
                 PXSnapshotString(@"CHookTestMode") ?: @"",
                 orig_sysctlbyname,
                 gEnableSysctlByNameHook ? @"YES" : @"NO",
@@ -1726,6 +1744,9 @@ static void PXInstallCHooks(void) {
                 orig_dlsym,
                 gEnableDlsymHook ? @"YES" : @"NO",
                 gEnableDeviceMetricsHook ? @"YES" : @"NO",
+                gEnableNetworkHook ? @"YES" : @"NO",
+                gEnableCarrierHook ? @"YES" : @"NO",
+                gEnablePrivateWiFiHook ? @"YES" : @"NO",
                 orig_MGCopyAnswer,
                 orig_MGCopyAnswerWithError,
                 gEnableMobileGestaltHook ? @"YES" : @"NO");
@@ -1736,6 +1757,9 @@ static void ProjectXInjectInit(void) {
     @autoreleasepool {
         PXLoadSnapshot();
         gEnableDeviceMetricsHook = PXSnapshotBool(@"EnableDeviceMetricsHook", NO);
+        gEnableNetworkHook = PXSnapshotBool(@"EnableNetworkHook", gEnableDeviceMetricsHook);
+        gEnableCarrierHook = PXSnapshotBool(@"EnableCarrierHook", gEnableDeviceMetricsHook);
+        gEnablePrivateWiFiHook = PXSnapshotBool(@"EnablePrivateWiFiHook", NO);
         PXWriteLoadedMarker();
         if (PXSnapshotBool(@"EnableObjCHooks", NO)) {
             PXInstallObjCHooks();
