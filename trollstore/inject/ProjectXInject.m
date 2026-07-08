@@ -55,6 +55,8 @@ static NSUInteger gDeviceMetricsImagesScanned = 0;
 static NSUInteger gDeviceMetricsSymbolsPatched = 0;
 static NSUInteger gNetworkImagesScanned = 0;
 static NSUInteger gNetworkSymbolsPatched = 0;
+static NSUInteger gSysctlByNameImagesScanned = 0;
+static NSUInteger gSysctlByNameSymbolsPatched = 0;
 
 static id PXSnapshotObject(NSString *key) {
     id value = gSnapshot[key];
@@ -1032,6 +1034,7 @@ static kern_return_t (*orig_host_statistics64)(host_t, host_flavor_t, host_info6
 static kern_return_t (*orig_host_info)(host_t, host_flavor_t, host_info_t, mach_msg_type_number_t *) = NULL;
 static const NXArchInfo *(*orig_NXGetLocalArchInfo)(void) = NULL;
 
+static int px_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
 static int px_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
 static int px_uname(struct utsname *value);
 static void *px_dlsym(void *handle, const char *symbol);
@@ -1206,6 +1209,20 @@ static void PXRebindSysctl(void) {
         gSysctlSymbolsPatched += PXRebindSymbolInImage(header, "_sysctl", (const void *)px_sysctl, (void **)&orig_sysctl);
     }
     PXRecordHookCall(@"rebind-summary", @"sysctl", [NSString stringWithFormat:@"images=%lu patched=%lu", (unsigned long)gSysctlImagesScanned, (unsigned long)gSysctlSymbolsPatched], gSysctlSymbolsPatched > 0, gSysctlSymbolsPatched > 0);
+}
+
+static void PXRebindSysctlByName(void) {
+    NSString *bundlePath = PXNormalizePath([[NSBundle mainBundle] bundlePath]);
+    uint32_t count = _dyld_image_count();
+    for (uint32_t i = 0; i < count; i++) {
+        const char *imageName = _dyld_get_image_name(i);
+        NSString *path = imageName ? PXNormalizePath([NSString stringWithUTF8String:imageName]) : @"";
+        if (!PXShouldRebindImagePath(path, bundlePath)) continue;
+        gSysctlByNameImagesScanned++;
+        const struct mach_header_64 *header = (const struct mach_header_64 *)_dyld_get_image_header(i);
+        gSysctlByNameSymbolsPatched += PXRebindSymbolInImage(header, "_sysctlbyname", (const void *)px_sysctlbyname, (void **)&orig_sysctlbyname);
+    }
+    PXRecordHookCall(@"rebind-summary", @"sysctlbyname", [NSString stringWithFormat:@"images=%lu patched=%lu", (unsigned long)gSysctlByNameImagesScanned, (unsigned long)gSysctlByNameSymbolsPatched], gSysctlByNameSymbolsPatched > 0, gSysctlByNameSymbolsPatched > 0);
 }
 
 static void PXRebindUname(void) {
@@ -1691,10 +1708,6 @@ static void *px_dlsym(void *handle, const char *symbol) {
     return PXCallOrigDlsym(handle, symbol);
 }
 
-__attribute__((used)) static struct { const void *replacement; const void *replacee; } PXInterposes[] __attribute__((section("__DATA,__interpose"))) = {
-    { (const void *)px_sysctlbyname, (const void *)sysctlbyname },
-};
-
 static void PXInstallCHooks(void) {
     gCHooksReady = NO;
     orig_sysctlbyname = dlsym(RTLD_NEXT, "sysctlbyname");
@@ -1717,6 +1730,9 @@ static void PXInstallCHooks(void) {
     gCHooksReady = YES;
     if (gEnableSysctlHook) {
         PXRebindSysctl();
+    }
+    if (gEnableSysctlByNameHook) {
+        PXRebindSysctlByName();
     }
     if (gEnableUnameHook) {
         PXRebindUname();
