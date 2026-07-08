@@ -630,6 +630,14 @@
             });
         });
     }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Apply Marker-Only Snapshot" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSDictionary *result = [PXDiagnostics applyMarkerOnlySnapshotForBundleID:targetBundleID];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                showResult(@"Apply Marker-Only Snapshot", result);
+            });
+        });
+    }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Enable ObjC Hooks Snapshot" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             NSDictionary *result = [PXDiagnostics enableObjCHooksSnapshotForBundleID:targetBundleID];
@@ -740,6 +748,29 @@
             });
         }]];
         [selfRef presentViewController:confirm animated:YES completion:nil];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Patch Carrier By Index" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        typeof(weakSelf) selfRef = weakSelf;
+        if (!selfRef) return;
+        UIAlertController *prompt = [UIAlertController alertControllerWithTitle:@"Patch Carrier By Index"
+                                                                        message:@"Run Scan Framework Carriers first. Enter candidate array index, for example CPU Dasher: 1 for GDTMobSDK if index 0/Tquic exits."
+                                                                 preferredStyle:UIAlertControllerStyleAlert];
+        [prompt addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+            textField.placeholder = @"0";
+            textField.text = @"0";
+            textField.keyboardType = UIKeyboardTypeNumberPad;
+        }];
+        [prompt addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+        [prompt addAction:[UIAlertAction actionWithTitle:@"Patch" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action2) {
+            NSUInteger index = (NSUInteger)[prompt.textFields.firstObject.text integerValue];
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                NSDictionary *result = [PXDiagnostics patchFrameworkCarrierBundleID:targetBundleID candidateIndex:index];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    showResult(@"Patch Carrier By Index", result);
+                });
+            });
+        }]];
+        [selfRef presentViewController:prompt animated:YES completion:nil];
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Patch Prepared Copy" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{

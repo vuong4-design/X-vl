@@ -719,6 +719,10 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
 }
 
 + (NSDictionary<NSString *,id> *)patchFrameworkCarrierBundleID:(NSString *)bundleID {
+    return [self patchFrameworkCarrierBundleID:bundleID candidateIndex:NSNotFound];
+}
+
++ (NSDictionary<NSString *,id> *)patchFrameworkCarrierBundleID:(NSString *)bundleID candidateIndex:(NSUInteger)candidateIndex {
     NSMutableDictionary *result = [NSMutableDictionary dictionary];
     result[@"bundleID"] = bundleID ?: @"";
     [PXDiagnostics log:@"[carrier] patch requested bundleID=%@", bundleID ?: @""];
@@ -729,6 +733,15 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
             return PXIPCarrierFail(result, scan[@"error"] ?: @"Carrier scan failed");
         }
         NSDictionary *selected = scan[@"selectedCarrier"];
+        if (candidateIndex != NSNotFound) {
+            NSArray *candidates = [scan[@"candidates"] isKindOfClass:[NSArray class]] ? scan[@"candidates"] : @[];
+            if (candidateIndex < candidates.count && [candidates[candidateIndex] isKindOfClass:[NSDictionary class]]) {
+                selected = candidates[candidateIndex];
+                result[@"selectedCandidateIndexOverride"] = @(candidateIndex);
+            } else {
+                return PXIPCarrierFail(result, @"Candidate index out of range");
+            }
+        }
         if (![selected isKindOfClass:[NSDictionary class]] || ![selected[@"path"] isKindOfClass:[NSString class]] || ![selected[@"path"] length]) {
             return PXIPCarrierFail(result, @"No eligible unencrypted framework/dylib carrier found");
         }

@@ -11,6 +11,7 @@ extern NSString * const PXInPlacePatcherErrorDomain;
 + (NSDictionary<NSString *, id> *)prepareBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)scanFrameworkCarriersBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)patchFrameworkCarrierBundleID:(NSString *)bundleID;
++ (NSDictionary<NSString *, id> *)patchFrameworkCarrierBundleID:(NSString *)bundleID candidateIndex:(NSUInteger)candidateIndex;
 + (NSDictionary<NSString *, id> *)patchPreparedCopyBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)exportPatchedTIPABundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)installPatchedCopyBundleID:(NSString *)bundleID;

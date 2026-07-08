@@ -25,12 +25,14 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSDictionary<NSString *, id> *)enableCarrierHookSnapshotForBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)enablePrivateWiFiHookSnapshotForBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)applyRuntimeSnapshotOnlyForBundleID:(NSString *)bundleID;
++ (NSDictionary<NSString *, id> *)applyMarkerOnlySnapshotForBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)enableCHookTestSnapshotForBundleID:(NSString *)bundleID mode:(NSString *)mode;
 + (NSDictionary<NSString *, id> *)injectionMarkerStatusForBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)dyldLaunchBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)prepareInPlaceBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)scanFrameworkCarriersBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)patchFrameworkCarrierBundleID:(NSString *)bundleID;
++ (NSDictionary<NSString *, id> *)patchFrameworkCarrierBundleID:(NSString *)bundleID candidateIndex:(NSUInteger)candidateIndex;
 + (NSDictionary<NSString *, id> *)patchPreparedInPlaceCopyBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)exportPatchedTIPABundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)installPatchedInPlaceCopyBundleID:(NSString *)bundleID;

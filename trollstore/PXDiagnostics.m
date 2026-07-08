@@ -589,6 +589,44 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     return info;
 }
 
++ (NSDictionary<NSString *,id> *)applyMarkerOnlySnapshotForBundleID:(NSString *)bundleID {
+    NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
+    [self log:@"[inject] applying marker-only snapshot bundleID=%@", targetBundleID];
+    NSError *err = nil;
+    NSDictionary *snapshot = [PXRuntimeSnapshot exportSnapshotForBundleID:targetBundleID
+                                                           enableObjCHooks:NO
+                                                              enableCHooks:NO
+                                                              cHookOptions:@{@"CHookTestMode": @"marker-only",
+                                                                             @"EnableSysctlByNameHook": @NO,
+                                                                             @"EnableSysctlHook": @NO,
+                                                                             @"EnableUnameHook": @NO,
+                                                                             @"EnableDlsymHook": @NO,
+                                                                             @"EnableDeviceMetricsHook": @NO,
+                                                                             @"EnableNetworkHook": @NO,
+                                                                             @"EnableCarrierHook": @NO,
+                                                                             @"EnablePrivateWiFiHook": @NO,
+                                                                             @"EnableMobileGestaltHook": @NO}
+                                                                     error:&err];
+    NSDictionary *status = [PXRuntimeSnapshot statusForBundleID:targetBundleID];
+    NSDictionary *patchStatus = [PXInPlacePatcher statusForBundleID:targetBundleID] ?: @{};
+    NSMutableDictionary *info = [NSMutableDictionary dictionaryWithDictionary:status ?: @{}];
+    info[@"patch"] = patchStatus;
+    info[@"exportOK"] = snapshot ? @"YES" : @"NO";
+    info[@"exportError"] = err.localizedDescription ?: @"";
+    PXDiagAddSnapshotFlags(info, snapshot ?: @{});
+    NSDictionary *state = [patchStatus[@"state"] isKindOfClass:[NSDictionary class]] ? patchStatus[@"state"] : nil;
+    NSString *executableName = state[@"executableName"] ?: patchStatus[@"executableName"] ?: @"";
+    BOOL killed = executableName.length ? PXKillallTermThenKill(executableName, 0.5) : NO;
+    BOOL exited = executableName.length ? PXWaitForProcessesToExit(@[executableName], 2.0) : NO;
+    info[@"executableName"] = executableName ?: @"";
+    info[@"targetKillRequested"] = executableName.length ? @"YES" : @"NO";
+    info[@"targetKillSignalSent"] = killed ? @"YES" : @"NO";
+    info[@"targetExited"] = exited ? @"YES" : @"NO";
+    info[@"note"] = @"Marker-only snapshot disables ObjC/C hooks and only tests whether the injected dylib can load and write its marker. Reopen the target app, then check Injection Marker Status.";
+    [self log:@"[inject] marker-only snapshot status=%@", info];
+    return info;
+}
+
 + (NSDictionary<NSString *,id> *)enableCHookTestSnapshotForBundleID:(NSString *)bundleID mode:(NSString *)mode {
     NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
     NSString *testMode = mode.length ? mode : @"sysctlbyname-safe";
@@ -687,6 +725,12 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
     [self log:@"[carrier] diagnostic patch bundleID=%@", targetBundleID];
     return [PXInPlacePatcher patchFrameworkCarrierBundleID:targetBundleID];
+}
+
++ (NSDictionary<NSString *,id> *)patchFrameworkCarrierBundleID:(NSString *)bundleID candidateIndex:(NSUInteger)candidateIndex {
+    NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
+    [self log:@"[carrier] diagnostic patch bundleID=%@ candidateIndex=%lu", targetBundleID, (unsigned long)candidateIndex];
+    return [PXInPlacePatcher patchFrameworkCarrierBundleID:targetBundleID candidateIndex:candidateIndex];
 }
 
 + (NSDictionary<NSString *,id> *)patchPreparedInPlaceCopyBundleID:(NSString *)bundleID {
