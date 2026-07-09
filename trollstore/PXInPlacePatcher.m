@@ -250,18 +250,25 @@ static NSDictionary<NSString *, id> *PXIPTrySignPath(NSString *path, NSString *e
     };
 }
 
-static NSString *PXIPResolveLoadCommandPath(NSString *loadName, NSString *executablePath, NSString *frameworksPath) {
+static NSString *PXIPResolveLoadCommandPathWithLoader(NSString *loadName, NSString *executablePath, NSString *frameworksPath, NSString *loaderPath) {
     if (!loadName.length) return nil;
     NSString *resolved = loadName;
     if ([resolved hasPrefix:@"@executable_path/"]) {
         NSString *exeDir = [executablePath stringByDeletingLastPathComponent];
         resolved = [exeDir stringByAppendingPathComponent:[resolved substringFromIndex:@"@executable_path/".length]];
+    } else if ([resolved hasPrefix:@"@loader_path/"]) {
+        NSString *loaderDir = loaderPath.length ? [loaderPath stringByDeletingLastPathComponent] : [executablePath stringByDeletingLastPathComponent];
+        resolved = [loaderDir stringByAppendingPathComponent:[resolved substringFromIndex:@"@loader_path/".length]];
     } else if ([resolved hasPrefix:@"@rpath/"]) {
         resolved = [frameworksPath stringByAppendingPathComponent:[resolved substringFromIndex:@"@rpath/".length]];
     } else if (![resolved isAbsolutePath]) {
         return nil;
     }
     return [[resolved stringByStandardizingPath] copy];
+}
+
+static NSString *PXIPResolveLoadCommandPath(NSString *loadName, NSString *executablePath, NSString *frameworksPath) {
+    return PXIPResolveLoadCommandPathWithLoader(loadName, executablePath, frameworksPath, executablePath);
 }
 
 static NSString *PXIPCanonicalPathKey(NSString *path) {
@@ -332,7 +339,6 @@ static unsigned long long PXIPFileInfoSize(NSDictionary *fileInfo) {
 
 static BOOL PXIPIsIgnoredCarrierName(NSString *name) {
     NSString *lower = name.lowercaseString ?: @"";
-    if ([lower hasPrefix:@"libswift"]) return YES;
     NSArray<NSString *> *ignored = @[
         @"projectxinject.dylib",
         @"cydiasubstrate",
@@ -344,6 +350,25 @@ static BOOL PXIPIsIgnoredCarrierName(NSString *name) {
         @"libellekit.dylib",
     ];
     return [ignored containsObject:lower];
+}
+
+static BOOL PXIPIsSwiftRuntimeName(NSString *name) {
+    return [[name ?: @""].lowercaseString hasPrefix:@"libswift"];
+}
+
+static BOOL PXIPIsSystemLoadName(NSString *loadName) {
+    NSString *s = loadName ?: @"";
+    return [s hasPrefix:@"/System/Library/"] || [s hasPrefix:@"/usr/lib/"];
+}
+
+static NSString *PXIPCarrierCategory(BOOL linked, BOOL dependency, BOOL swiftRuntime, BOOL weakMissing, BOOL extensionOnly, BOOL eligible) {
+    if (weakMissing) return @"weak-missing-load";
+    if (extensionOnly) return @"extension-only";
+    if (linked && swiftRuntime) return @"swift-runtime-linked";
+    if (linked) return @"linked-from-main";
+    if (dependency) return @"dependency-chain";
+    if (swiftRuntime) return @"swift-runtime-unlinked";
+    return eligible ? @"fallback-unlinked" : @"rejected";
 }
 
 static BOOL PXIPLooksLikeMachO(NSString *path) {
@@ -613,10 +638,13 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         result[@"mainEncryptionError"] = mainEncErr.localizedDescription ?: @"";
         result[@"mainLoadCommandError"] = mainLoadErr.localizedDescription ?: @"";
         result[@"mainLoadedDylibs"] = mainLoad[@"loadedDylibs"] ?: @[];
+        result[@"mainLoadCommands"] = mainLoad[@"loadCommands"] ?: @[];
         result[@"mainRpaths"] = mainLoad[@"rpaths"] ?: @[];
 
         NSMutableSet<NSString *> *linkedPaths = [NSMutableSet set];
         NSMutableSet<NSString *> *linkedRelativeKeys = [NSMutableSet set];
+        NSMutableArray<NSDictionary *> *weakMissingLoads = [NSMutableArray array];
+        NSMutableArray<NSDictionary *> *extensionOnlyCandidates = [NSMutableArray array];
         for (NSString *loadName in mainLoad[@"loadedDylibs"] ?: @[]) {
             NSString *relativeKey = PXIPFrameworkRelativeLoadKey(loadName);
             if (relativeKey.length) [linkedRelativeKeys addObject:relativeKey];
@@ -625,16 +653,82 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
                 [linkedPaths addObject:PXIPCanonicalPathKey(resolvedPath)];
             }
         }
+        for (NSDictionary *loadCommand in mainLoad[@"loadCommands"] ?: @[]) {
+            NSString *loadName = [loadCommand[@"name"] isKindOfClass:[NSString class]] ? loadCommand[@"name"] : @"";
+            if (![loadCommand[@"weak"] isEqual:@"YES"] || PXIPIsSystemLoadName(loadName)) continue;
+            NSString *resolvedPath = PXIPResolveLoadCommandPath(loadName, executablePath, frameworksPath);
+            if (resolvedPath.length && ![fm fileExistsAtPath:resolvedPath]) {
+                [weakMissingLoads addObject:@{
+                    @"loadName": loadName ?: @"",
+                    @"resolvedPath": resolvedPath ?: @"",
+                    @"relativeLoadKey": PXIPFrameworkRelativeLoadKey(loadName) ?: @"",
+                    @"cmdName": loadCommand[@"cmdName"] ?: @"",
+                    @"category": @"weak-missing-load",
+                }];
+            }
+        }
+
+        NSString *pluginsPath = [bundlePath stringByAppendingPathComponent:@"PlugIns"];
+        BOOL pluginsIsDir = NO;
+        if ([fm fileExistsAtPath:pluginsPath isDirectory:&pluginsIsDir] && pluginsIsDir) {
+            NSDirectoryEnumerator *pluginEnum = [fm enumeratorAtPath:pluginsPath];
+            NSString *pluginRel = nil;
+            while ((pluginRel = [pluginEnum nextObject])) {
+                if (![pluginRel containsString:@".appex/Frameworks/"]) continue;
+                NSString *path = [pluginsPath stringByAppendingPathComponent:pluginRel];
+                NSDictionary *attrs = [fm attributesOfItemAtPath:path error:nil];
+                if (![attrs[NSFileType] isEqualToString:NSFileTypeRegular]) continue;
+                NSString *parentExt = path.stringByDeletingLastPathComponent.pathExtension.lowercaseString ?: @"";
+                BOOL extensionLooksEligible = [path.pathExtension.lowercaseString isEqualToString:@"dylib"] || [parentExt isEqualToString:@"framework"] || path.pathExtension.length == 0;
+                if (!extensionLooksEligible || !PXIPLooksLikeMachO(path)) continue;
+                NSError *encErr = nil;
+                NSDictionary *enc = [PXMachOInjector encryptionSummaryForMachOAtPath:path error:&encErr];
+                [extensionOnlyCandidates addObject:@{
+                    @"path": path ?: @"",
+                    @"relativePath": [@"PlugIns" stringByAppendingPathComponent:pluginRel] ?: @"",
+                    @"name": path.lastPathComponent ?: @"",
+                    @"fileSize": attrs[NSFileSize] ?: @0,
+                    @"encrypted": [enc[@"encrypted"] isEqual:@"YES"] ? @"YES" : @"NO",
+                    @"eligible": @"NO",
+                    @"category": @"extension-only",
+                    @"skipReason": @"extension-only-not-loaded-by-main-app",
+                    @"encryption": enc ?: @{},
+                    @"encryptionError": encErr.localizedDescription ?: @"",
+                }];
+            }
+        }
 
         NSMutableArray<NSDictionary *> *candidates = [NSMutableArray array];
         BOOL frameworksIsDir = NO;
         if (![fm fileExistsAtPath:frameworksPath isDirectory:&frameworksIsDir] || !frameworksIsDir) {
+            BOOL mainEncrypted = [mainEncryption[@"encrypted"] isEqual:@"YES"];
             result[@"ok"] = @"YES";
             result[@"error"] = @"";
             result[@"frameworksExists"] = @"NO";
             result[@"candidateCount"] = @0;
             result[@"eligibleCount"] = @0;
+            result[@"linkedEligibleCount"] = @0;
+            result[@"standardLinkedEligibleCount"] = @0;
+            result[@"dependencyEligibleCount"] = @0;
+            result[@"swiftRuntimeCandidateCount"] = @0;
+            result[@"fallbackEligibleCount"] = @0;
+            result[@"rejectedCandidateCount"] = @0;
             result[@"selectedCarrier"] = @{};
+            result[@"selectedCarrierPath"] = @"";
+            result[@"selectedCarrierRelativePath"] = @"";
+            result[@"selectedCarrierLinkedFromMain"] = @"NO";
+            result[@"selectedCarrierCategory"] = @"";
+            result[@"selectionReason"] = weakMissingLoads.count ? @"weak-missing-load" : @"no-frameworks-directory";
+            result[@"recommendedPatchAction"] = weakMissingLoads.count ? @"Weak Missing Load Candidate" : @"No carrier action available";
+            result[@"recommendationReason"] = weakMissingLoads.count ? @"Main executable has a weak non-system load command whose resolved file is missing; a synthetic carrier may be possible but is not implemented." : (mainEncrypted ? @"Main executable is encrypted and the app has no Frameworks directory, so in-place carrier injection is blocked." : @"App has no Frameworks directory and no bundled Mach-O carrier was found.");
+            result[@"linkedFrameworkCandidates"] = @[];
+            result[@"dependencyChainCandidates"] = @[];
+            result[@"swiftRuntimeCandidates"] = @[];
+            result[@"fallbackCandidates"] = @[];
+            result[@"weakMissingLoadCandidates"] = weakMissingLoads ?: @[];
+            result[@"extensionOnlyCandidates"] = extensionOnlyCandidates ?: @[];
+            result[@"rejectedCandidates"] = @[];
+            result[@"candidates"] = @[];
             [PXDiagnostics log:@"[carrier] scan result=%@", result];
             return result;
         }
@@ -657,6 +751,7 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
             NSError *loadErr = nil;
             NSDictionary *load = [PXMachOInjector loadCommandSummaryForMachOAtPath:path error:&loadErr];
             BOOL encrypted = [enc[@"encrypted"] isEqual:@"YES"];
+            BOOL swiftRuntime = PXIPIsSwiftRuntimeName(last);
             BOOL ignored = PXIPIsIgnoredCarrierName(last) || PXIPIsIgnoredCarrierName(path.stringByDeletingLastPathComponent.lastPathComponent);
             NSString *relativeKey = rel ?: @"";
             BOOL linked = [linkedPaths containsObject:PXIPCanonicalPathKey(path)] || [linkedRelativeKeys containsObject:relativeKey];
@@ -664,6 +759,7 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
             if (encrypted) skipReason = @"encrypted";
             else if (ignored) skipReason = @"ignored-name";
             else if (encErr || loadErr) skipReason = @"unreadable";
+            BOOL eligibleRow = (!encrypted && !ignored && !encErr && !loadErr);
             NSMutableDictionary *row = [@{
                 @"path": path ?: @"",
                 @"relativePath": rel ?: @"",
@@ -671,27 +767,98 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
                 @"name": last ?: @"",
                 @"fileSize": attrs[NSFileSize] ?: @0,
                 @"encrypted": encrypted ? @"YES" : @"NO",
+                @"swiftRuntime": swiftRuntime ? @"YES" : @"NO",
                 @"ignored": ignored ? @"YES" : @"NO",
                 @"linkedFromMain": linked ? @"YES" : @"NO",
-                @"eligible": (!encrypted && !ignored && !encErr && !loadErr) ? @"YES" : @"NO",
+                @"dependencyOfLinkedCarrier": @"NO",
+                @"eligible": eligibleRow ? @"YES" : @"NO",
                 @"skipReason": skipReason ?: @"",
+                @"category": PXIPCarrierCategory(linked, NO, swiftRuntime, NO, NO, eligibleRow),
                 @"encryption": enc ?: @{},
                 @"encryptionError": encErr.localizedDescription ?: @"",
                 @"loadedDylibs": load[@"loadedDylibs"] ?: @[],
+                @"loadCommands": load[@"loadCommands"] ?: @[],
                 @"rpaths": load[@"rpaths"] ?: @[],
                 @"loadCommandError": loadErr.localizedDescription ?: @"",
             } mutableCopy];
             [candidates addObject:row];
         }
 
+        NSMutableDictionary<NSString *, NSMutableDictionary *> *candidateByPath = [NSMutableDictionary dictionary];
+        for (NSMutableDictionary *row in candidates) {
+            NSString *path = [row[@"path"] isKindOfClass:[NSString class]] ? row[@"path"] : @"";
+            if (path.length) candidateByPath[PXIPCanonicalPathKey(path)] = row;
+        }
+        NSMutableSet<NSString *> *dependencyPaths = [NSMutableSet set];
+        for (NSDictionary *row in candidates) {
+            if (![row[@"linkedFromMain"] isEqual:@"YES"]) continue;
+            NSString *loaderPath = [row[@"path"] isKindOfClass:[NSString class]] ? row[@"path"] : @"";
+            for (NSString *loadName in row[@"loadedDylibs"] ?: @[]) {
+                NSString *resolvedPath = PXIPResolveLoadCommandPathWithLoader(loadName, executablePath, frameworksPath, loaderPath);
+                NSString *key = PXIPCanonicalPathKey(resolvedPath);
+                if (key.length && candidateByPath[key]) [dependencyPaths addObject:key];
+            }
+        }
+        for (NSString *key in dependencyPaths) {
+            NSMutableDictionary *row = candidateByPath[key];
+            if (!row || [row[@"linkedFromMain"] isEqual:@"YES"]) continue;
+            BOOL swiftRuntime = [row[@"swiftRuntime"] isEqual:@"YES"];
+            BOOL eligibleRow = [row[@"eligible"] isEqual:@"YES"];
+            row[@"dependencyOfLinkedCarrier"] = @"YES";
+            row[@"category"] = PXIPCarrierCategory(NO, YES, swiftRuntime, NO, NO, eligibleRow);
+        }
+
         NSMutableArray<NSDictionary *> *eligible = [NSMutableArray array];
         NSMutableArray<NSDictionary *> *linkedEligible = [NSMutableArray array];
+        NSMutableArray<NSDictionary *> *standardLinkedEligible = [NSMutableArray array];
+        NSMutableArray<NSDictionary *> *dependencyEligible = [NSMutableArray array];
+        NSMutableArray<NSDictionary *> *swiftRuntimeCandidates = [NSMutableArray array];
+        NSMutableArray<NSDictionary *> *fallbackEligible = [NSMutableArray array];
+        NSMutableArray<NSDictionary *> *rejectedCandidates = [NSMutableArray array];
         for (NSDictionary *row in candidates) {
-            if (![row[@"eligible"] isEqual:@"YES"]) continue;
+            BOOL rowEligible = [row[@"eligible"] isEqual:@"YES"];
+            BOOL swiftRuntime = [row[@"swiftRuntime"] isEqual:@"YES"];
+            BOOL linked = [row[@"linkedFromMain"] isEqual:@"YES"];
+            BOOL dependency = [row[@"dependencyOfLinkedCarrier"] isEqual:@"YES"];
+            if (!rowEligible) {
+                [rejectedCandidates addObject:row];
+                continue;
+            }
             [eligible addObject:row];
-            if ([row[@"linkedFromMain"] isEqual:@"YES"]) [linkedEligible addObject:row];
+            if (linked) [linkedEligible addObject:row];
+            if (linked && !swiftRuntime) [standardLinkedEligible addObject:row];
+            else if (dependency && !swiftRuntime) [dependencyEligible addObject:row];
+            else if (swiftRuntime) [swiftRuntimeCandidates addObject:row];
+            else [fallbackEligible addObject:row];
         }
-        NSDictionary *selected = linkedEligible.firstObject ?: eligible.firstObject ?: @{};
+        NSDictionary *selected = standardLinkedEligible.firstObject ?: dependencyEligible.firstObject ?: fallbackEligible.firstObject ?: swiftRuntimeCandidates.firstObject ?: eligible.firstObject ?: @{};
+        BOOL mainEncrypted = [mainEncryption[@"encrypted"] isEqual:@"YES"];
+        NSString *selectionReason = @"no-eligible-carrier";
+        NSString *recommendedAction = @"No carrier action available";
+        NSString *recommendationReason = @"No eligible unencrypted bundled Mach-O carrier found.";
+        if (standardLinkedEligible.count) {
+            selectionReason = @"linked-from-main";
+            recommendedAction = @"Patch Framework Carrier";
+            recommendationReason = @"Found an unencrypted non-Swift bundled Mach-O loaded directly by the main executable.";
+        } else if (dependencyEligible.count) {
+            selectionReason = @"dependency-chain";
+            recommendedAction = @"Patch Dependency Carrier";
+            recommendationReason = @"Found an unencrypted bundled Mach-O loaded by a framework that is loaded by the main executable.";
+        } else if (fallbackEligible.count) {
+            selectionReason = @"fallback-unlinked";
+            recommendedAction = @"Patch Framework Carrier can try fallback, but target may not load it";
+            recommendationReason = @"Found an unencrypted bundled Mach-O, but scan did not prove it is loaded by the main executable.";
+        } else if (swiftRuntimeCandidates.count) {
+            selectionReason = @"swift-runtime";
+            recommendedAction = @"Patch Swift Runtime Carrier (diagnostic)";
+            recommendationReason = @"Only Swift runtime candidates were found; try manually by index if no app-owned carrier exists.";
+        } else if (weakMissingLoads.count) {
+            selectionReason = @"weak-missing-load";
+            recommendedAction = @"Weak Missing Load Candidate";
+            recommendationReason = @"Main executable has a weak non-system load command whose resolved file is missing; a synthetic carrier may be possible but is not implemented.";
+        } else if (mainEncrypted) {
+            recommendationReason = @"Main executable is encrypted and no linked unencrypted bundled Mach-O carrier was found; in-place carrier injection is blocked for this app.";
+        }
 
         result[@"ok"] = @"YES";
         result[@"error"] = @"";
@@ -701,12 +868,26 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         result[@"candidateCount"] = @(candidates.count);
         result[@"eligibleCount"] = @(eligible.count);
         result[@"linkedEligibleCount"] = @(linkedEligible.count);
+        result[@"standardLinkedEligibleCount"] = @(standardLinkedEligible.count);
+        result[@"dependencyEligibleCount"] = @(dependencyEligible.count);
+        result[@"swiftRuntimeCandidateCount"] = @(swiftRuntimeCandidates.count);
+        result[@"fallbackEligibleCount"] = @(fallbackEligible.count);
+        result[@"rejectedCandidateCount"] = @(rejectedCandidates.count);
         result[@"selectedCarrier"] = selected ?: @{};
         result[@"selectedCarrierPath"] = selected[@"path"] ?: @"";
         result[@"selectedCarrierRelativePath"] = selected[@"relativePath"] ?: @"";
         result[@"selectedCarrierLinkedFromMain"] = selected[@"linkedFromMain"] ?: @"NO";
-        result[@"selectionReason"] = linkedEligible.count ? @"linked-from-main" : (eligible.count ? @"fallback-first-unencrypted-framework-mach-o" : @"no-eligible-carrier");
-        result[@"recommendedPatchAction"] = linkedEligible.count ? @"Patch Framework Carrier" : (eligible.count ? @"Patch Framework Carrier can try fallback, but target may not load early enough" : @"No carrier action available");
+        result[@"selectedCarrierCategory"] = selected[@"category"] ?: @"";
+        result[@"selectionReason"] = selectionReason ?: @"";
+        result[@"recommendedPatchAction"] = recommendedAction ?: @"";
+        result[@"recommendationReason"] = recommendationReason ?: @"";
+        result[@"linkedFrameworkCandidates"] = standardLinkedEligible ?: @[];
+        result[@"dependencyChainCandidates"] = dependencyEligible ?: @[];
+        result[@"swiftRuntimeCandidates"] = swiftRuntimeCandidates ?: @[];
+        result[@"fallbackCandidates"] = fallbackEligible ?: @[];
+        result[@"weakMissingLoadCandidates"] = weakMissingLoads ?: @[];
+        result[@"extensionOnlyCandidates"] = extensionOnlyCandidates ?: @[];
+        result[@"rejectedCandidates"] = rejectedCandidates ?: @[];
         result[@"candidates"] = candidates ?: @[];
         [PXDiagnostics log:@"[carrier] scan result=%@", result];
         return result;
@@ -744,6 +925,10 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         }
         if (![selected isKindOfClass:[NSDictionary class]] || ![selected[@"path"] isKindOfClass:[NSString class]] || ![selected[@"path"] length]) {
             return PXIPCarrierFail(result, @"No eligible unencrypted framework/dylib carrier found");
+        }
+        if (![selected[@"eligible"] isEqual:@"YES"]) {
+            NSString *reason = [selected[@"skipReason"] isKindOfClass:[NSString class]] ? selected[@"skipReason"] : @"not eligible";
+            return PXIPCarrierFail(result, [NSString stringWithFormat:@"Selected carrier is not eligible: %@", reason.length ? reason : @"not eligible"]);
         }
 
         NSString *carrierPath = selected[@"path"];

@@ -6,6 +6,8 @@ Carrier injection for the App Store AIDA64 target is now root-side verified.
 
 CPU Dasher (`com.suwen.DeviceInfo`) was also verified after removing global `sysctlbyname` interpose and switching to bundle-local rebind. See `CPU_DASHER_NOTES.md` for the full issue record and test sequence.
 
+For apps where carrier scan finds no patchable file, see `NO_CARRIER_FALLBACK_NOTES.md`. The scanner now reports fallback categories such as dependency-chain, Swift runtime, weak missing loads, extension-only, and rejected candidates.
+
 Verified from `diagnostic (9).log`:
 
 - `targetDylibExists = YES`

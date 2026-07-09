@@ -345,6 +345,7 @@ static NSDictionary<NSString *, id> *PXMILoadCommandSummaryForSlice(NSData *data
 
     NSMutableArray<NSString *> *dylibs = [NSMutableArray array];
     NSMutableArray<NSString *> *rpaths = [NSMutableArray array];
+    NSMutableArray<NSDictionary<NSString *, id> *> *loadCommands = [NSMutableArray array];
     uint64_t cursor = commandsOffset;
     for (uint32_t i = 0; i < ncmds; i++) {
         if (!PXRangeOK(data.length, cursor, sizeof(struct load_command))) break;
@@ -359,7 +360,19 @@ static NSDictionary<NSString *, id> *PXMILoadCommandSummaryForSlice(NSData *data
                 char *name = (char *)lc + nameOffset;
                 NSUInteger maxLen = cmdsize - nameOffset;
                 NSString *s = [[NSString alloc] initWithBytes:name length:strnlen(name, maxLen) encoding:NSUTF8StringEncoding];
-                if (s.length) [dylibs addObject:s];
+                if (s.length) {
+                    [dylibs addObject:s];
+                    NSString *cmdName = @"LC_LOAD_DYLIB";
+                    if (cmd == LC_LOAD_WEAK_DYLIB) cmdName = @"LC_LOAD_WEAK_DYLIB";
+                    else if (cmd == LC_LOAD_UPWARD_DYLIB) cmdName = @"LC_LOAD_UPWARD_DYLIB";
+                    else if (cmd == LC_REEXPORT_DYLIB) cmdName = @"LC_REEXPORT_DYLIB";
+                    [loadCommands addObject:@{
+                        @"name": s,
+                        @"cmd": @(cmd),
+                        @"cmdName": cmdName,
+                        @"weak": (cmd == LC_LOAD_WEAK_DYLIB) ? @"YES" : @"NO",
+                    }];
+                }
             }
         } else if (cmd == LC_RPATH) {
             struct rpath_command *rc = (struct rpath_command *)lc;
@@ -381,6 +394,7 @@ static NSDictionary<NSString *, id> *PXMILoadCommandSummaryForSlice(NSData *data
         @"ncmds": @(ncmds),
         @"sizeofcmds": @(sizeofcmds),
         @"loadedDylibs": dylibs,
+        @"loadCommands": loadCommands,
         @"rpaths": rpaths,
     };
 }
