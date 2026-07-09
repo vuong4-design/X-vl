@@ -1287,11 +1287,32 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
             }
         }
         result[@"rootTargetDylibInfoAfterCopy"] = PXIPRunRootDetailed(@[@"fileinfo", targetPath]);
+        if (![result[@"rootTargetDylibInfoAfterCopy"][@"ok"] isEqual:@"YES"]) {
+            NSDictionary *toolCopyDylib = PXIPRunRootDetailed(@[@"toolcpfile", sourceDylib, targetPath]);
+            result[@"toolCopyDylibAfterMissingInfo"] = toolCopyDylib ?: @{};
+            if (![toolCopyDylib[@"ok"] isEqual:@"YES"]) {
+                return PXIPCarrierFail(result, toolCopyDylib[@"error"] ?: @"Failed to install weak-load dylib with bundled copy tool");
+            }
+            result[@"rootTargetDylibInfoAfterToolCopy"] = PXIPRunRootDetailed(@[@"fileinfo", targetPath]);
+        }
+        NSDictionary *copyInfo = result[@"rootTargetDylibInfoAfterToolCopy"] ?: result[@"rootTargetDylibInfoAfterCopy"] ?: @{};
+        if (![copyInfo[@"ok"] isEqual:@"YES"]) {
+            return PXIPCarrierFail(result, copyInfo[@"error"] ?: @"Weak-load dylib copy did not materialize in target bundle");
+        }
         result[@"signTargetDylib"] = PXIPTrySignPath(targetPath, [[NSBundle mainBundle] pathForResource:@"ProjectXInject" ofType:@"entitlements.plist"]) ?: @{};
+        if (![result[@"signTargetDylib"][@"ok"] isEqual:@"YES"]) {
+            return PXIPCarrierFail(result, result[@"signTargetDylib"][@"error"] ?: @"Failed to sign weak-load dylib");
+        }
         result[@"ctBypassTargetDylib"] = PXIPTryCoreTrustBypass(targetPath, teamID) ?: @{};
+        if (![result[@"ctBypassTargetDylib"][@"ok"] isEqual:@"YES"]) {
+            return PXIPCarrierFail(result, result[@"ctBypassTargetDylib"][@"error"] ?: @"Failed to CoreTrust-bypass weak-load dylib");
+        }
         result[@"chownDylib"] = PXIPRunRootDetailed(@[@"chown", @"33", @"33", targetPath]);
         result[@"chmodDylib"] = PXIPRunRootDetailed(@[@"chmod", @"0755", targetPath]);
         result[@"rootTargetDylibInfoAfterInstall"] = PXIPRunRootDetailed(@[@"fileinfo", targetPath]);
+        if (![result[@"rootTargetDylibInfoAfterInstall"][@"ok"] isEqual:@"YES"]) {
+            return PXIPCarrierFail(result, result[@"rootTargetDylibInfoAfterInstall"][@"error"] ?: @"Weak-load dylib missing after install");
+        }
 
         NSMutableDictionary *state = [NSMutableDictionary dictionaryWithDictionary:PXIPReadState(bundleID) ?: @{}];
         [state addEntriesFromDictionary:@{
