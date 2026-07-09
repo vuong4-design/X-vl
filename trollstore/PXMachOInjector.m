@@ -642,6 +642,7 @@ static NSDictionary<NSString *, id> *PXMILoadCommandSummaryForSlice(NSData *data
     NSMutableArray *slices = [NSMutableArray array];
     NSMutableOrderedSet<NSString *> *allDylibs = [NSMutableOrderedSet orderedSet];
     NSMutableOrderedSet<NSString *> *allRpaths = [NSMutableOrderedSet orderedSet];
+    NSMutableArray<NSDictionary<NSString *, id> *> *allLoadCommands = [NSMutableArray array];
     if (magic == FAT_MAGIC || magic == FAT_CIGAM) {
         BOOL swap = (magic == FAT_CIGAM);
         struct fat_header *fh = (struct fat_header *)base;
@@ -663,6 +664,7 @@ static NSDictionary<NSString *, id> *PXMILoadCommandSummaryForSlice(NSData *data
             if (sliceErr) row[@"error"] = sliceErr.localizedDescription ?: @"";
             for (NSString *s in row[@"loadedDylibs"] ?: @[]) [allDylibs addObject:s];
             for (NSString *s in row[@"rpaths"] ?: @[]) [allRpaths addObject:s];
+            for (NSDictionary *loadCommand in row[@"loadCommands"] ?: @[]) [allLoadCommands addObject:loadCommand];
             [slices addObject:row];
         }
     } else {
@@ -673,10 +675,12 @@ static NSDictionary<NSString *, id> *PXMILoadCommandSummaryForSlice(NSData *data
         if (sliceErr) row[@"error"] = sliceErr.localizedDescription ?: @"";
         for (NSString *s in row[@"loadedDylibs"] ?: @[]) [allDylibs addObject:s];
         for (NSString *s in row[@"rpaths"] ?: @[]) [allRpaths addObject:s];
+        for (NSDictionary *loadCommand in row[@"loadCommands"] ?: @[]) [allLoadCommands addObject:loadCommand];
         [slices addObject:row];
     }
     summary[@"slices"] = slices;
     summary[@"loadedDylibs"] = allDylibs.array;
+    summary[@"loadCommands"] = allLoadCommands;
     summary[@"rpaths"] = allRpaths.array;
     return summary;
 }

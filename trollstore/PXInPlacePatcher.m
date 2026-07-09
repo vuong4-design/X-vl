@@ -651,7 +651,7 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
             NSString *relativeKey = PXIPFrameworkRelativeLoadKey(loadName);
             if (relativeKey.length) [linkedRelativeKeys addObject:relativeKey];
             NSString *resolvedPath = PXIPResolveLoadCommandPath(loadName, executablePath, frameworksPath);
-            if (resolvedPath.length && [PXIPCanonicalPathKey(resolvedPath) hasPrefix:PXIPCanonicalPathKey(frameworksPath)]) {
+            if (resolvedPath.length && [fm fileExistsAtPath:resolvedPath] && [PXIPCanonicalPathKey(resolvedPath) hasPrefix:PXIPCanonicalPathKey(frameworksPath)]) {
                 [linkedPaths addObject:PXIPCanonicalPathKey(resolvedPath)];
             }
         }
