@@ -751,6 +751,12 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     return [PXInPlacePatcher patchFrameworkCarrierBundleID:targetBundleID candidateIndex:candidateIndex];
 }
 
++ (NSDictionary<NSString *,id> *)installWeakLoadCarrierBundleID:(NSString *)bundleID {
+    NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
+    [self log:@"[weak-carrier] diagnostic install bundleID=%@", targetBundleID];
+    return [PXInPlacePatcher installWeakLoadCarrierBundleID:targetBundleID];
+}
+
 + (NSDictionary<NSString *,id> *)patchPreparedInPlaceCopyBundleID:(NSString *)bundleID {
     NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
     [self log:@"[patch] diagnostic patch prepared copy bundleID=%@", targetBundleID];

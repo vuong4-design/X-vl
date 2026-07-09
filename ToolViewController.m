@@ -732,6 +732,23 @@
             });
         });
     }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Install Weak-Load Carrier" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
+        typeof(weakSelf) selfRef = weakSelf;
+        if (!selfRef) return;
+        UIAlertController *confirm = [UIAlertController alertControllerWithTitle:@"Install Weak-Load Carrier"
+                                                                         message:[NSString stringWithFormat:@"Uses the first weakMissingLoadCandidates entry for %@ and installs ProjectXInject.dylib at that missing @rpath location. Use marker-only first.", targetBundleID]
+                                                                  preferredStyle:UIAlertControllerStyleAlert];
+        [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+        [confirm addAction:[UIAlertAction actionWithTitle:@"Install" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action2) {
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                NSDictionary *result = [PXDiagnostics installWeakLoadCarrierBundleID:targetBundleID];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    showResult(@"Install Weak-Load Carrier", result);
+                });
+            });
+        }]];
+        [selfRef presentViewController:confirm animated:YES completion:nil];
+    }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Patch Framework Carrier" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
         typeof(weakSelf) selfRef = weakSelf;
         if (!selfRef) return;

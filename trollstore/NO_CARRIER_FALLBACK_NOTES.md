@@ -95,13 +95,26 @@ Patch Framework Carrier can try fallback, but target may not load it
 
 The main executable has a weak non-system load command whose resolved file is missing.
 
-This may support a future synthetic carrier approach where the missing weak framework/dylib is created inside the app bundle.
+This supports a synthetic carrier approach where the missing weak framework/dylib is created inside the app bundle by copying `ProjectXInject.dylib` to the missing resolved path.
 
 Current status:
 
 ```text
-Reported only. Synthetic carrier creation is not implemented yet.
+Implemented by Diag -> Install Weak-Load Carrier.
 ```
+
+Example from `com.benchu.ARMCPUZ`:
+
+```text
+loadName = @rpath/libswift_Concurrency.dylib
+mainRpaths = (
+  /usr/lib/swift,
+  @executable_path/Frameworks
+)
+resolvedPath = ARMCPUZ.app/Frameworks/libswift_Concurrency.dylib
+```
+
+Only use this route when `rpathResolutionDetails.existingPath` is empty. If dyld can already resolve an earlier rpath entry, the synthetic app-bundle file will not be loaded.
 
 ### extension-only
 
@@ -135,7 +148,7 @@ Then in-place framework carrier injection is blocked for that target.
 Remaining options are:
 
 1. Repack/decrypt route.
-2. Future synthetic weak-load carrier if `weakMissingLoadCandidates` exists.
+2. Synthetic weak-load carrier if `weakMissingLoadCandidates` exists and `rpathResolutionDetails.existingPath` is empty.
 3. Experimental DYLD launch diagnostics.
 4. Mark the app unsupported for TrollStore in-place carrier mode.
 
@@ -145,6 +158,7 @@ Remaining options are:
 2. Run `Scan Framework Carriers`.
 3. Read `recommendedPatchAction` and `recommendationReason`.
 4. If `dependencyChainCandidates` has entries, try patch by the candidate index listed in `candidates`.
-5. If only `swiftRuntimeCandidates` exists, test manually by index in marker-only mode first.
-6. If only `extensionOnlyCandidates` exists, do not patch for main app injection.
-7. If no candidates exist and main is encrypted, treat the app as blocked for in-place carrier mode.
+5. If `weakMissingLoadCandidates` exists, use `Install Weak-Load Carrier`, then apply marker-only snapshot and launch the app.
+6. If only `swiftRuntimeCandidates` exists, test manually by index in marker-only mode first.
+7. If only `extensionOnlyCandidates` exists, do not patch for main app injection.
+8. If no candidates exist and main is encrypted, treat the app as blocked for in-place carrier mode.

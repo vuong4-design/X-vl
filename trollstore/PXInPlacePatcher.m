@@ -1214,6 +1214,119 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
     }
 }
 
++ (NSDictionary<NSString *,id> *)installWeakLoadCarrierBundleID:(NSString *)bundleID {
+    NSMutableDictionary *result = [NSMutableDictionary dictionary];
+    result[@"bundleID"] = bundleID ?: @"";
+    [PXDiagnostics log:@"[weak-carrier] install requested bundleID=%@", bundleID ?: @""];
+    @try {
+        NSDictionary *scan = [self scanFrameworkCarriersBundleID:bundleID];
+        result[@"scan"] = scan ?: @{};
+        if (![scan[@"ok"] isEqual:@"YES"]) {
+            return PXIPCarrierFail(result, scan[@"error"] ?: @"Carrier scan failed");
+        }
+        NSArray *weakCandidates = [scan[@"weakMissingLoadCandidates"] isKindOfClass:[NSArray class]] ? scan[@"weakMissingLoadCandidates"] : @[];
+        NSDictionary *selected = weakCandidates.firstObject;
+        if (![selected isKindOfClass:[NSDictionary class]]) {
+            return PXIPCarrierFail(result, @"No weak missing load candidate found");
+        }
+
+        NSString *targetPath = [selected[@"resolvedPath"] isKindOfClass:[NSString class]] ? selected[@"resolvedPath"] : @"";
+        NSString *sourceDylib = [PXRuntimeSnapshot bundledInjectDylibPath];
+        NSString *frameworksPath = scan[@"frameworksPath"] ?: @"";
+        NSString *executableName = scan[@"executableName"] ?: @"";
+        NSString *teamID = PXIPTeamIDFromExecutable(scan[@"executablePath"] ?: @"");
+        NSFileManager *fm = [NSFileManager defaultManager];
+        if (!targetPath.length) return PXIPCarrierFail(result, @"Weak candidate missing resolvedPath");
+        if (!sourceDylib.length || ![fm fileExistsAtPath:sourceDylib]) return PXIPCarrierFail(result, @"Bundled ProjectXInject.dylib missing");
+        if ([fm fileExistsAtPath:targetPath]) return PXIPCarrierFail(result, @"Weak-load target already exists; refusing to overwrite existing file");
+
+        NSError *snapshotErr = nil;
+        NSDictionary *snapshot = [PXRuntimeSnapshot exportSnapshotForBundleID:bundleID
+                                                               enableObjCHooks:NO
+                                                                  enableCHooks:NO
+                                                                  cHookOptions:@{@"CHookTestMode": @"marker-only",
+                                                                                 @"EnableSysctlByNameHook": @NO,
+                                                                                 @"EnableSysctlHook": @NO,
+                                                                                 @"EnableUnameHook": @NO,
+                                                                                 @"EnableDlsymHook": @NO,
+                                                                                 @"EnableDeviceMetricsHook": @NO,
+                                                                                 @"EnableNetworkHook": @NO,
+                                                                                 @"EnableCarrierHook": @NO,
+                                                                                 @"EnablePrivateWiFiHook": @NO,
+                                                                                 @"EnableMobileGestaltHook": @NO}
+                                                                         error:&snapshotErr];
+        result[@"snapshot"] = snapshot ?: @{};
+        result[@"snapshotError"] = snapshotErr.localizedDescription ?: @"";
+        result[@"selectedWeakLoad"] = selected ?: @{};
+        result[@"targetDylib"] = targetPath ?: @"";
+        result[@"sourceDylib"] = sourceDylib ?: @"";
+        result[@"teamID"] = teamID ?: @"";
+        result[@"mode"] = @"weak-load-carrier";
+
+        NSString *targetDir = [targetPath stringByDeletingLastPathComponent];
+        NSString *rootErr = nil;
+        if (targetDir.length && !PXIPRunRoot(@[@"mkdir", targetDir], &rootErr)) {
+            return PXIPCarrierFail(result, rootErr ?: @"Failed to create weak-load target directory");
+        }
+        result[@"signBundledDylib"] = PXIPTrySignPath(sourceDylib, [[NSBundle mainBundle] pathForResource:@"ProjectXInject" ofType:@"entitlements.plist"]) ?: @{};
+        result[@"ctBypassBundledDylib"] = PXIPTryCoreTrustBypass(sourceDylib, teamID) ?: @{};
+        result[@"rootSourceDylibInfoAfterSign"] = PXIPRunRootDetailed(@[@"fileinfo", sourceDylib]);
+
+        if (executableName.length) {
+            PXKillallTermThenKill(executableName, 0.5);
+            PXWaitForProcessesToExit(@[executableName], 2.0);
+        }
+
+        NSDictionary *copyDylib = PXIPRunRootDetailed(@[@"cpfile", sourceDylib, targetPath]);
+        result[@"copyDylib"] = copyDylib ?: @{};
+        if (![copyDylib[@"ok"] isEqual:@"YES"]) {
+            NSDictionary *toolCopyDylib = PXIPRunRootDetailed(@[@"toolcpfile", sourceDylib, targetPath]);
+            result[@"toolCopyDylibAfterCpfileFailure"] = toolCopyDylib ?: @{};
+            if (![toolCopyDylib[@"ok"] isEqual:@"YES"]) {
+                return PXIPCarrierFail(result, toolCopyDylib[@"error"] ?: copyDylib[@"error"] ?: @"Failed to install weak-load dylib");
+            }
+        }
+        result[@"rootTargetDylibInfoAfterCopy"] = PXIPRunRootDetailed(@[@"fileinfo", targetPath]);
+        result[@"signTargetDylib"] = PXIPTrySignPath(targetPath, [[NSBundle mainBundle] pathForResource:@"ProjectXInject" ofType:@"entitlements.plist"]) ?: @{};
+        result[@"ctBypassTargetDylib"] = PXIPTryCoreTrustBypass(targetPath, teamID) ?: @{};
+        result[@"chownDylib"] = PXIPRunRootDetailed(@[@"chown", @"33", @"33", targetPath]);
+        result[@"chmodDylib"] = PXIPRunRootDetailed(@[@"chmod", @"0755", targetPath]);
+        result[@"rootTargetDylibInfoAfterInstall"] = PXIPRunRootDetailed(@[@"fileinfo", targetPath]);
+
+        NSMutableDictionary *state = [NSMutableDictionary dictionaryWithDictionary:PXIPReadState(bundleID) ?: @{}];
+        [state addEntriesFromDictionary:@{
+            @"mode": @"weak-load-carrier-installed",
+            @"bundleID": bundleID ?: @"",
+            @"bundlePath": scan[@"bundlePath"] ?: @"",
+            @"executableName": executableName ?: @"",
+            @"executablePath": scan[@"executablePath"] ?: @"",
+            @"frameworksPath": frameworksPath ?: @"",
+            @"version": scan[@"version"] ?: @"",
+            @"build": scan[@"build"] ?: @"",
+            @"targetDylib": targetPath ?: @"",
+            @"weakLoadName": selected[@"loadName"] ?: @"",
+            @"weakLoadResolvedPath": targetPath ?: @"",
+            @"selectedWeakLoad": selected ?: @{},
+            @"installedAt": @([[NSDate date] timeIntervalSince1970]),
+            @"syntheticWeakLoadInstalled": @"YES",
+        }];
+        PXIPWriteState(bundleID, state);
+        result[@"state"] = state ?: @{};
+        result[@"targetDylibExists"] = [fm fileExistsAtPath:targetPath] ? @"YES" : @"NO";
+        PXIPAddCodeSignatureOnlyStatus(result, @"targetDylib", targetPath);
+        result[@"ok"] = @"YES";
+        result[@"error"] = @"";
+        result[@"note"] = @"Synthetic weak-load carrier installed. Apply Marker-Only Snapshot, launch target app, then check Injection Marker Status.";
+        [PXDiagnostics log:@"[weak-carrier] install result=%@", result];
+        return result;
+    } @catch (NSException *ex) {
+        result[@"ok"] = @"NO";
+        result[@"error"] = [NSString stringWithFormat:@"Exception during weak-load carrier install: %@ %@", ex.name ?: @"", ex.reason ?: @""];
+        [PXDiagnostics log:@"[weak-carrier] install exception=%@", result[@"error"]];
+        return result;
+    }
+}
+
 + (NSDictionary<NSString *,id> *)patchPreparedCopyBundleID:(NSString *)bundleID {
     NSMutableDictionary *result = [NSMutableDictionary dictionary];
     result[@"bundleID"] = bundleID ?: @"";
@@ -1497,9 +1610,20 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
     NSString *carrierPath = state[@"carrierPath"];
     NSString *backupCarrier = state[@"backupCarrier"];
     NSString *targetDylib = state[@"targetDylib"];
+    BOOL weakLoadMode = [state[@"mode"] isEqual:@"weak-load-carrier-installed"] || [state[@"syntheticWeakLoadInstalled"] isEqual:@"YES"];
     NSFileManager *fm = [NSFileManager defaultManager];
     BOOL carrierMode = carrierPath.length && backupCarrier.length;
-    if (carrierMode && [fm fileExistsAtPath:backupCarrier]) {
+    if (weakLoadMode) {
+        if (targetDylib.length) {
+            NSDictionary *removeWeakLoad = PXIPRunRootDetailed(@[@"rm", targetDylib]);
+            result[@"removeWeakLoadDylib"] = removeWeakLoad ?: @{};
+            if (![removeWeakLoad[@"ok"] isEqual:@"YES"] && [fm fileExistsAtPath:targetDylib]) {
+                result[@"ok"] = @"NO";
+                result[@"error"] = removeWeakLoad[@"error"] ?: @"Failed to remove synthetic weak-load dylib";
+                return result;
+            }
+        }
+    } else if (carrierMode && [fm fileExistsAtPath:backupCarrier]) {
         NSDictionary *replaceCarrier = PXIPRunRootDetailed(@[@"installfile", backupCarrier, carrierPath]);
         result[@"replaceCarrier"] = replaceCarrier ?: @{};
         if (![replaceCarrier[@"ok"] isEqual:@"YES"]) {
@@ -1522,7 +1646,7 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         }
     }
     NSString *rootErr = nil;
-    if (targetDylib.length) {
+    if (targetDylib.length && !weakLoadMode) {
         rootErr = nil;
         if (!PXIPRunRoot(@[@"rm", targetDylib], &rootErr)) {
             [PXDiagnostics log:@"[patch] restore warning remove dylib failed=%@", rootErr ?: @""];
