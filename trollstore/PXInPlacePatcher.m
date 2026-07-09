@@ -271,6 +271,43 @@ static NSString *PXIPResolveLoadCommandPath(NSString *loadName, NSString *execut
     return PXIPResolveLoadCommandPathWithLoader(loadName, executablePath, frameworksPath, executablePath);
 }
 
+static NSArray<NSString *> *PXIPResolveRPathLoadCandidates(NSString *loadName, NSArray<NSString *> *rpaths, NSString *executablePath, NSString *frameworksPath, NSString *loaderPath) {
+    if (![loadName hasPrefix:@"@rpath/"]) {
+        NSString *resolved = PXIPResolveLoadCommandPathWithLoader(loadName, executablePath, frameworksPath, loaderPath);
+        return resolved.length ? @[resolved] : @[];
+    }
+    NSString *suffix = [loadName substringFromIndex:@"@rpath/".length];
+    NSMutableArray<NSString *> *resolved = [NSMutableArray array];
+    for (NSString *rpath in rpaths ?: @[]) {
+        NSString *base = rpath ?: @"";
+        if ([base hasPrefix:@"@executable_path/"]) {
+            NSString *exeDir = [executablePath stringByDeletingLastPathComponent];
+            base = [exeDir stringByAppendingPathComponent:[base substringFromIndex:@"@executable_path/".length]];
+        } else if ([base hasPrefix:@"@loader_path/"]) {
+            NSString *loaderDir = loaderPath.length ? [loaderPath stringByDeletingLastPathComponent] : [executablePath stringByDeletingLastPathComponent];
+            base = [loaderDir stringByAppendingPathComponent:[base substringFromIndex:@"@loader_path/".length]];
+        }
+        if (!base.length) continue;
+        [resolved addObject:[[base stringByAppendingPathComponent:suffix] stringByStandardizingPath]];
+    }
+    return resolved;
+}
+
+static NSString *PXIPFirstExistingResolvedPath(NSArray<NSString *> *paths, NSFileManager *fm) {
+    for (NSString *path in paths ?: @[]) {
+        if (path.length && [fm fileExistsAtPath:path]) return path;
+    }
+    return @"";
+}
+
+static NSString *PXIPFirstAppBundleResolvedPath(NSArray<NSString *> *paths, NSString *frameworksPath) {
+    NSString *frameworksKey = PXIPCanonicalPathKey(frameworksPath);
+    for (NSString *path in paths ?: @[]) {
+        if (path.length && [PXIPCanonicalPathKey(path) hasPrefix:frameworksKey]) return path;
+    }
+    return @"";
+}
+
 static NSString *PXIPCanonicalPathKey(NSString *path) {
     NSString *rawPath = path ? path : @"";
     NSString *key = [[rawPath stringByStandardizingPath] copy];
@@ -646,11 +683,13 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         NSMutableSet<NSString *> *linkedPaths = [NSMutableSet set];
         NSMutableSet<NSString *> *linkedRelativeKeys = [NSMutableSet set];
         NSMutableArray<NSDictionary *> *weakMissingLoads = [NSMutableArray array];
+        NSMutableArray<NSDictionary *> *rpathResolutionDetails = [NSMutableArray array];
         NSMutableArray<NSDictionary *> *extensionOnlyCandidates = [NSMutableArray array];
         for (NSString *loadName in mainLoad[@"loadedDylibs"] ?: @[]) {
             NSString *relativeKey = PXIPFrameworkRelativeLoadKey(loadName);
             if (relativeKey.length) [linkedRelativeKeys addObject:relativeKey];
-            NSString *resolvedPath = PXIPResolveLoadCommandPath(loadName, executablePath, frameworksPath);
+            NSArray *resolvedCandidates = PXIPResolveRPathLoadCandidates(loadName, mainLoad[@"rpaths"] ?: @[], executablePath, frameworksPath, executablePath);
+            NSString *resolvedPath = PXIPFirstExistingResolvedPath(resolvedCandidates, fm);
             if (resolvedPath.length && [fm fileExistsAtPath:resolvedPath] && [PXIPCanonicalPathKey(resolvedPath) hasPrefix:PXIPCanonicalPathKey(frameworksPath)]) {
                 [linkedPaths addObject:PXIPCanonicalPathKey(resolvedPath)];
             }
@@ -658,17 +697,29 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         for (NSDictionary *loadCommand in mainLoad[@"loadCommands"] ?: @[]) {
             NSString *loadName = [loadCommand[@"name"] isKindOfClass:[NSString class]] ? loadCommand[@"name"] : @"";
             if (![loadCommand[@"weak"] isEqual:@"YES"] || PXIPIsSystemLoadName(loadName)) continue;
-            NSString *resolvedPath = PXIPResolveLoadCommandPath(loadName, executablePath, frameworksPath);
-            if (resolvedPath.length && ![fm fileExistsAtPath:resolvedPath]) {
+            NSArray *resolvedCandidates = PXIPResolveRPathLoadCandidates(loadName, mainLoad[@"rpaths"] ?: @[], executablePath, frameworksPath, executablePath);
+            NSString *existingPath = PXIPFirstExistingResolvedPath(resolvedCandidates, fm);
+            NSString *appBundlePath = PXIPFirstAppBundleResolvedPath(resolvedCandidates, frameworksPath);
+            [rpathResolutionDetails addObject:@{
+                @"loadName": loadName ?: @"",
+                @"cmdName": loadCommand[@"cmdName"] ?: @"",
+                @"resolvedCandidates": resolvedCandidates ?: @[],
+                @"existingPath": existingPath ?: @"",
+                @"appBundlePath": appBundlePath ?: @"",
+                @"appBundlePathExists": (appBundlePath.length && [fm fileExistsAtPath:appBundlePath]) ? @"YES" : @"NO",
+            }];
+            if (appBundlePath.length && !existingPath.length) {
                 [weakMissingLoads addObject:@{
                     @"loadName": loadName ?: @"",
-                    @"resolvedPath": resolvedPath ?: @"",
+                    @"resolvedPath": appBundlePath ?: @"",
+                    @"resolvedCandidates": resolvedCandidates ?: @[],
                     @"relativeLoadKey": PXIPFrameworkRelativeLoadKey(loadName) ?: @"",
                     @"cmdName": loadCommand[@"cmdName"] ?: @"",
                     @"category": @"weak-missing-load",
                 }];
             }
         }
+        result[@"rpathResolutionDetails"] = rpathResolutionDetails ?: @[];
 
         NSString *pluginsPath = [bundlePath stringByAppendingPathComponent:@"PlugIns"];
         BOOL pluginsIsDir = NO;
