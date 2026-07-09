@@ -271,6 +271,8 @@ static NSString *PXIPResolveLoadCommandPath(NSString *loadName, NSString *execut
     return PXIPResolveLoadCommandPathWithLoader(loadName, executablePath, frameworksPath, executablePath);
 }
 
+static NSString *PXIPCanonicalPathKey(NSString *path);
+
 static NSArray<NSString *> *PXIPResolveRPathLoadCandidates(NSString *loadName, NSArray<NSString *> *rpaths, NSString *executablePath, NSString *frameworksPath, NSString *loaderPath) {
     if (![loadName hasPrefix:@"@rpath/"]) {
         NSString *resolved = PXIPResolveLoadCommandPathWithLoader(loadName, executablePath, frameworksPath, loaderPath);
