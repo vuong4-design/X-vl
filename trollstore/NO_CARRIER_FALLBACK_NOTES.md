@@ -22,6 +22,7 @@ dependencyChainCandidates
 swiftRuntimeCandidates
 fallbackCandidates
 weakMissingLoadCandidates
+weakSystemShadowedLoadCandidates
 extensionOnlyCandidates
 rejectedCandidates
 ```
@@ -114,7 +115,31 @@ mainRpaths = (
 resolvedPath = ARMCPUZ.app/Frameworks/libswift_Concurrency.dylib
 ```
 
-Only use this route when `rpathResolutionDetails.existingPath` is empty. If dyld can already resolve an earlier rpath entry, the synthetic app-bundle file will not be loaded.
+Only use this route when `rpathResolutionDetails.existingPath` is empty and `weakSyntheticUsable`/`weakLoadInstallViable` is `YES`. If dyld can already resolve an earlier rpath entry, or a known Swift/system shared-cache image can satisfy the load before `@executable_path/Frameworks`, the synthetic app-bundle file is not expected to load.
+
+### weak-missing-load-shadowed
+
+The main executable has a weak `@rpath` load with an app-bundle fallback path, but a system rpath or shared-cache image can satisfy the load first.
+
+Example from `com.benchu.ARMCPUZ`:
+
+```text
+loadName = @rpath/libswift_Concurrency.dylib
+mainRpaths = (
+  /usr/lib/swift,
+  @executable_path/Frameworks
+)
+```
+
+Even if `/usr/lib/swift/libswift_Concurrency.dylib` is not visible as a normal file, dyld can satisfy Swift runtime loads from the shared cache before it reaches `ARMCPUZ.app/Frameworks/libswift_Concurrency.dylib`. In marker-only testing, the synthetic file installed, signed, and CoreTrust-bypassed successfully, but no early marker was written. That means `ProjectXInject.dylib` was not mapped into the process.
+
+Recommended action:
+
+```text
+No weak-load carrier action available
+```
+
+Do not run `Install Weak-Load Carrier` for candidates reported under `weakSystemShadowedLoadCandidates`.
 
 ### extension-only
 
@@ -148,7 +173,7 @@ Then in-place framework carrier injection is blocked for that target.
 Remaining options are:
 
 1. Repack/decrypt route.
-2. Synthetic weak-load carrier if `weakMissingLoadCandidates` exists and `rpathResolutionDetails.existingPath` is empty.
+2. Synthetic weak-load carrier if `weakMissingLoadCandidates` exists and `weakLoadInstallViable = YES`.
 3. Experimental DYLD launch diagnostics.
 4. Mark the app unsupported for TrollStore in-place carrier mode.
 
@@ -158,7 +183,8 @@ Remaining options are:
 2. Run `Scan Framework Carriers`.
 3. Read `recommendedPatchAction` and `recommendationReason`.
 4. If `dependencyChainCandidates` has entries, try patch by the candidate index listed in `candidates`.
-5. If `weakMissingLoadCandidates` exists, use `Install Weak-Load Carrier`, then apply marker-only snapshot and launch the app.
-6. If only `swiftRuntimeCandidates` exists, test manually by index in marker-only mode first.
-7. If only `extensionOnlyCandidates` exists, do not patch for main app injection.
-8. If no candidates exist and main is encrypted, treat the app as blocked for in-place carrier mode.
+5. If `weakMissingLoadCandidates` exists and no shadow risk is reported, use `Install Weak-Load Carrier`, then apply marker-only snapshot and launch the app.
+6. If only `weakSystemShadowedLoadCandidates` exists, do not install a synthetic carrier; treat the target as blocked for in-place carrier mode unless another candidate appears.
+7. If only `swiftRuntimeCandidates` exists, test manually by index in marker-only mode first.
+8. If only `extensionOnlyCandidates` exists, do not patch for main app injection.
+9. If no candidates exist and main is encrypted, treat the app as blocked for in-place carrier mode.

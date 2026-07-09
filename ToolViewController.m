@@ -736,7 +736,7 @@
         typeof(weakSelf) selfRef = weakSelf;
         if (!selfRef) return;
         UIAlertController *confirm = [UIAlertController alertControllerWithTitle:@"Install Weak-Load Carrier"
-                                                                         message:[NSString stringWithFormat:@"Uses the first weakMissingLoadCandidates entry for %@ and installs ProjectXInject.dylib at that missing @rpath location. Use marker-only first.", targetBundleID]
+                                                                         message:[NSString stringWithFormat:@"Uses the first installable weakMissingLoadCandidates entry for %@. Scan first; system/shared-cache shadowed candidates are refused because dyld is not expected to load the synthetic file.", targetBundleID]
                                                                   preferredStyle:UIAlertControllerStyleAlert];
         [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
         [confirm addAction:[UIAlertAction actionWithTitle:@"Install" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action2) {

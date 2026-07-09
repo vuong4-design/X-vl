@@ -272,6 +272,7 @@ static NSString *PXIPResolveLoadCommandPath(NSString *loadName, NSString *execut
 }
 
 static NSString *PXIPCanonicalPathKey(NSString *path);
+static NSString *PXIPFrameworkRelativeLoadKey(NSString *loadName);
 
 static NSArray<NSString *> *PXIPResolveRPathLoadCandidates(NSString *loadName, NSArray<NSString *> *rpaths, NSString *executablePath, NSString *frameworksPath, NSString *loaderPath) {
     if (![loadName hasPrefix:@"@rpath/"]) {
@@ -306,6 +307,43 @@ static NSString *PXIPFirstAppBundleResolvedPath(NSArray<NSString *> *paths, NSSt
     NSString *frameworksKey = PXIPCanonicalPathKey(frameworksPath);
     for (NSString *path in paths ?: @[]) {
         if (path.length && [PXIPCanonicalPathKey(path) hasPrefix:frameworksKey]) return path;
+    }
+    return @"";
+}
+
+static BOOL PXIPHasSystemResolvedPathBeforeAppBundle(NSArray<NSString *> *paths, NSString *frameworksPath) {
+    NSString *frameworksKey = PXIPCanonicalPathKey(frameworksPath);
+    for (NSString *path in paths ?: @[]) {
+        NSString *key = PXIPCanonicalPathKey(path);
+        if (!key.length) continue;
+        if ([key hasPrefix:frameworksKey]) return NO;
+        if ([key hasPrefix:@"/usr/lib/"] || [key hasPrefix:@"/System/Library/"]) return YES;
+    }
+    return NO;
+}
+
+static NSString *PXIPWeakLoadSystemShadowRisk(NSString *loadName, NSArray<NSString *> *paths, NSString *frameworksPath) {
+    NSString *frameworksKey = PXIPCanonicalPathKey(frameworksPath);
+    NSString *firstSystemPath = @"";
+    for (NSString *path in paths ?: @[]) {
+        NSString *key = PXIPCanonicalPathKey(path);
+        if (!key.length) continue;
+        if ([key hasPrefix:frameworksKey]) break;
+        if ([key hasPrefix:@"/usr/lib/"] || [key hasPrefix:@"/System/Library/"]) {
+            firstSystemPath = path ?: @"";
+            break;
+        }
+    }
+    if (!firstSystemPath.length) return @"";
+
+    NSString *relativeKey = PXIPFrameworkRelativeLoadKey(loadName).lowercaseString ?: @"";
+    NSString *last = firstSystemPath.lastPathComponent.lowercaseString ?: @"";
+    NSString *systemKey = PXIPCanonicalPathKey(firstSystemPath);
+    if (([systemKey hasPrefix:@"/usr/lib/swift/"] || [relativeKey hasPrefix:@"libswift"] || [last hasPrefix:@"libswift"]) && [last hasSuffix:@".dylib"]) {
+        return @"swift-runtime-shared-cache";
+    }
+    if ([systemKey hasPrefix:@"/System/Library/Frameworks/"] || [systemKey hasPrefix:@"/System/Library/PrivateFrameworks/"]) {
+        return @"system-framework-shared-cache";
     }
     return @"";
 }
@@ -685,6 +723,7 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         NSMutableSet<NSString *> *linkedPaths = [NSMutableSet set];
         NSMutableSet<NSString *> *linkedRelativeKeys = [NSMutableSet set];
         NSMutableArray<NSDictionary *> *weakMissingLoads = [NSMutableArray array];
+        NSMutableArray<NSDictionary *> *weakSystemShadowedLoads = [NSMutableArray array];
         NSMutableArray<NSDictionary *> *rpathResolutionDetails = [NSMutableArray array];
         NSMutableArray<NSDictionary *> *extensionOnlyCandidates = [NSMutableArray array];
         for (NSString *loadName in mainLoad[@"loadedDylibs"] ?: @[]) {
@@ -702,6 +741,9 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
             NSArray *resolvedCandidates = PXIPResolveRPathLoadCandidates(loadName, mainLoad[@"rpaths"] ?: @[], executablePath, frameworksPath, executablePath);
             NSString *existingPath = PXIPFirstExistingResolvedPath(resolvedCandidates, fm);
             NSString *appBundlePath = PXIPFirstAppBundleResolvedPath(resolvedCandidates, frameworksPath);
+            BOOL systemPathBeforeAppBundle = PXIPHasSystemResolvedPathBeforeAppBundle(resolvedCandidates, frameworksPath);
+            NSString *systemShadowRisk = PXIPWeakLoadSystemShadowRisk(loadName, resolvedCandidates, frameworksPath);
+            BOOL weakSyntheticUsable = appBundlePath.length && !existingPath.length && !systemPathBeforeAppBundle && !systemShadowRisk.length;
             [rpathResolutionDetails addObject:@{
                 @"loadName": loadName ?: @"",
                 @"cmdName": loadCommand[@"cmdName"] ?: @"",
@@ -709,8 +751,13 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
                 @"existingPath": existingPath ?: @"",
                 @"appBundlePath": appBundlePath ?: @"",
                 @"appBundlePathExists": (appBundlePath.length && [fm fileExistsAtPath:appBundlePath]) ? @"YES" : @"NO",
+                @"systemResolvedPathBeforeAppBundle": systemPathBeforeAppBundle ? @"YES" : @"NO",
+                @"systemShadowRisk": systemShadowRisk ?: @"",
+                @"weakSyntheticUsable": weakSyntheticUsable ? @"YES" : @"NO",
+                @"weakLoadInstallViable": weakSyntheticUsable ? @"YES" : @"NO",
+                @"syntheticWillLoadLikely": weakSyntheticUsable ? @"YES" : @"NO",
             }];
-            if (appBundlePath.length && !existingPath.length) {
+            if (weakSyntheticUsable) {
                 [weakMissingLoads addObject:@{
                     @"loadName": loadName ?: @"",
                     @"resolvedPath": appBundlePath ?: @"",
@@ -718,6 +765,20 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
                     @"relativeLoadKey": PXIPFrameworkRelativeLoadKey(loadName) ?: @"",
                     @"cmdName": loadCommand[@"cmdName"] ?: @"",
                     @"category": @"weak-missing-load",
+                }];
+            } else if (appBundlePath.length && !existingPath.length && (systemPathBeforeAppBundle || systemShadowRisk.length)) {
+                [weakSystemShadowedLoads addObject:@{
+                    @"loadName": loadName ?: @"",
+                    @"resolvedPath": appBundlePath ?: @"",
+                    @"resolvedCandidates": resolvedCandidates ?: @[],
+                    @"relativeLoadKey": PXIPFrameworkRelativeLoadKey(loadName) ?: @"",
+                    @"cmdName": loadCommand[@"cmdName"] ?: @"",
+                    @"category": @"weak-missing-load-shadowed",
+                    @"skipReason": systemShadowRisk.length ? systemShadowRisk : @"system-rpath-before-app-bundle",
+                    @"systemResolvedPathBeforeAppBundle": systemPathBeforeAppBundle ? @"YES" : @"NO",
+                    @"systemShadowRisk": systemShadowRisk ?: @"",
+                    @"weakLoadInstallViable": @"NO",
+                    @"syntheticWillLoadLikely": @"NO",
                 }];
             }
         }
@@ -773,14 +834,15 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
             result[@"selectedCarrierRelativePath"] = @"";
             result[@"selectedCarrierLinkedFromMain"] = @"NO";
             result[@"selectedCarrierCategory"] = @"";
-            result[@"selectionReason"] = weakMissingLoads.count ? @"weak-missing-load" : @"no-frameworks-directory";
+            result[@"selectionReason"] = weakMissingLoads.count ? @"weak-missing-load" : (weakSystemShadowedLoads.count ? @"weak-missing-load-shadowed" : @"no-frameworks-directory");
             result[@"recommendedPatchAction"] = weakMissingLoads.count ? @"Weak Missing Load Candidate" : @"No carrier action available";
-            result[@"recommendationReason"] = weakMissingLoads.count ? @"Main executable has a weak non-system load command whose resolved file is missing; a synthetic carrier may be possible but is not implemented." : (mainEncrypted ? @"Main executable is encrypted and the app has no Frameworks directory, so in-place carrier injection is blocked." : @"App has no Frameworks directory and no bundled Mach-O carrier was found.");
+            result[@"recommendationReason"] = weakMissingLoads.count ? @"Main executable has a weak @rpath load whose app-bundle path is missing; Install Weak-Load Carrier can try a synthetic dylib." : (weakSystemShadowedLoads.count ? @"A weak @rpath app-bundle path is missing, but a system rpath/shared-cache image can satisfy the load before @executable_path/Frameworks; synthetic weak-load carrier is not expected to load." : (mainEncrypted ? @"Main executable is encrypted and the app has no Frameworks directory, so in-place carrier injection is blocked." : @"App has no Frameworks directory and no bundled Mach-O carrier was found."));
             result[@"linkedFrameworkCandidates"] = @[];
             result[@"dependencyChainCandidates"] = @[];
             result[@"swiftRuntimeCandidates"] = @[];
             result[@"fallbackCandidates"] = @[];
             result[@"weakMissingLoadCandidates"] = weakMissingLoads ?: @[];
+            result[@"weakSystemShadowedLoadCandidates"] = weakSystemShadowedLoads ?: @[];
             result[@"extensionOnlyCandidates"] = extensionOnlyCandidates ?: @[];
             result[@"rejectedCandidates"] = @[];
             result[@"candidates"] = @[];
@@ -910,7 +972,11 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         } else if (weakMissingLoads.count) {
             selectionReason = @"weak-missing-load";
             recommendedAction = @"Weak Missing Load Candidate";
-            recommendationReason = @"Main executable has a weak non-system load command whose resolved file is missing; a synthetic carrier may be possible but is not implemented.";
+            recommendationReason = @"Main executable has a weak @rpath load whose app-bundle path is missing; Install Weak-Load Carrier can try a synthetic dylib.";
+        } else if (weakSystemShadowedLoads.count) {
+            selectionReason = @"weak-missing-load-shadowed";
+            recommendedAction = @"No weak-load carrier action available";
+            recommendationReason = @"A weak @rpath app-bundle path is missing, but a system rpath/shared-cache image can satisfy the load before @executable_path/Frameworks; synthetic weak-load carrier is not expected to load.";
         } else if (mainEncrypted) {
             recommendationReason = @"Main executable is encrypted and no linked unencrypted bundled Mach-O carrier was found; in-place carrier injection is blocked for this app.";
         }
@@ -941,6 +1007,7 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         result[@"swiftRuntimeCandidates"] = swiftRuntimeCandidates ?: @[];
         result[@"fallbackCandidates"] = fallbackEligible ?: @[];
         result[@"weakMissingLoadCandidates"] = weakMissingLoads ?: @[];
+        result[@"weakSystemShadowedLoadCandidates"] = weakSystemShadowedLoads ?: @[];
         result[@"extensionOnlyCandidates"] = extensionOnlyCandidates ?: @[];
         result[@"rejectedCandidates"] = rejectedCandidates ?: @[];
         result[@"candidates"] = candidates ?: @[];
@@ -1225,8 +1292,15 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
             return PXIPCarrierFail(result, scan[@"error"] ?: @"Carrier scan failed");
         }
         NSArray *weakCandidates = [scan[@"weakMissingLoadCandidates"] isKindOfClass:[NSArray class]] ? scan[@"weakMissingLoadCandidates"] : @[];
+        NSArray *shadowedCandidates = [scan[@"weakSystemShadowedLoadCandidates"] isKindOfClass:[NSArray class]] ? scan[@"weakSystemShadowedLoadCandidates"] : @[];
         NSDictionary *selected = weakCandidates.firstObject;
         if (![selected isKindOfClass:[NSDictionary class]]) {
+            if (shadowedCandidates.count) {
+                result[@"weakSystemShadowedLoadCandidates"] = shadowedCandidates ?: @[];
+                result[@"recommendedPatchAction"] = @"No weak-load carrier action available";
+                result[@"recommendationReason"] = @"Only shadowed weak-load candidates were found. dyld can satisfy the load from a system rpath/shared-cache image before @executable_path/Frameworks, so installing a synthetic dylib is not expected to load.";
+                return PXIPCarrierFail(result, @"No installable weak missing load candidate found; candidate is system/shared-cache shadowed");
+            }
             return PXIPCarrierFail(result, @"No weak missing load candidate found");
         }
 
@@ -1312,6 +1386,21 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         result[@"rootTargetDylibInfoAfterInstall"] = PXIPRunRootDetailed(@[@"fileinfo", targetPath]);
         if (![result[@"rootTargetDylibInfoAfterInstall"][@"ok"] isEqual:@"YES"]) {
             return PXIPCarrierFail(result, result[@"rootTargetDylibInfoAfterInstall"][@"error"] ?: @"Weak-load dylib missing after install");
+        }
+        NSDictionary *signTargetResult = [result[@"signTargetDylib"] isKindOfClass:[NSDictionary class]] ? result[@"signTargetDylib"] : @{};
+        NSDictionary *ctTargetResult = [result[@"ctBypassTargetDylib"] isKindOfClass:[NSDictionary class]] ? result[@"ctBypassTargetDylib"] : @{};
+        NSDictionary *fileTargetResult = [result[@"rootTargetDylibInfoAfterInstall"] isKindOfClass:[NSDictionary class]] ? result[@"rootTargetDylibInfoAfterInstall"] : @{};
+        NSDictionary *chmodResult = [result[@"chmodDylib"] isKindOfClass:[NSDictionary class]] ? result[@"chmodDylib"] : @{};
+        NSDictionary *chownResult = [result[@"chownDylib"] isKindOfClass:[NSDictionary class]] ? result[@"chownDylib"] : @{};
+        BOOL signVerified = [signTargetResult[@"ok"] isEqual:@"YES"];
+        BOOL ctVerified = [ctTargetResult[@"ok"] isEqual:@"YES"];
+        BOOL fileVerified = [fileTargetResult[@"ok"] isEqual:@"YES"];
+        BOOL chmodVerified = [chmodResult[@"ok"] isEqual:@"YES"];
+        BOOL chownVerified = [chownResult[@"ok"] isEqual:@"YES"];
+        BOOL installVerified = signVerified && ctVerified && fileVerified && chmodVerified && chownVerified;
+        result[@"weakLoadInstallVerified"] = installVerified ? @"YES" : @"NO";
+        if (!installVerified) {
+            return PXIPCarrierFail(result, @"Weak-load dylib installed but final sign/ctbypass/ownership verification failed");
         }
 
         NSMutableDictionary *state = [NSMutableDictionary dictionaryWithDictionary:PXIPReadState(bundleID) ?: @{}];
@@ -1636,6 +1725,8 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
     BOOL carrierMode = carrierPath.length && backupCarrier.length;
     if (weakLoadMode) {
         if (targetDylib.length) {
+            BOOL weakLoadFileExistedBeforeRestore = [fm fileExistsAtPath:targetDylib];
+            result[@"weakLoadFileExistedBeforeRestore"] = weakLoadFileExistedBeforeRestore ? @"YES" : @"NO";
             NSDictionary *removeWeakLoad = PXIPRunRootDetailed(@[@"rm", targetDylib]);
             result[@"removeWeakLoadDylib"] = removeWeakLoad ?: @{};
             if (![removeWeakLoad[@"ok"] isEqual:@"YES"] && [fm fileExistsAtPath:targetDylib]) {
@@ -1643,6 +1734,7 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
                 result[@"error"] = removeWeakLoad[@"error"] ?: @"Failed to remove synthetic weak-load dylib";
                 return result;
             }
+            result[@"weakLoadFileMissingWasAccepted"] = (!weakLoadFileExistedBeforeRestore && ![removeWeakLoad[@"ok"] isEqual:@"YES"]) ? @"YES" : @"NO";
         }
     } else if (carrierMode && [fm fileExistsAtPath:backupCarrier]) {
         NSDictionary *replaceCarrier = PXIPRunRootDetailed(@[@"installfile", backupCarrier, carrierPath]);
@@ -1673,7 +1765,18 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
             [PXDiagnostics log:@"[patch] restore warning remove dylib failed=%@", rootErr ?: @""];
         }
     }
-    [fm removeItemAtPath:PXIPStatePath(bundleID) error:nil];
+    NSError *removeStateErr = nil;
+    BOOL stateRemoved = [fm removeItemAtPath:PXIPStatePath(bundleID) error:&removeStateErr];
+    BOOL stateStillExists = [fm fileExistsAtPath:PXIPStatePath(bundleID)];
+    result[@"stateCleared"] = (!stateStillExists) ? @"YES" : @"NO";
+    result[@"stateClearError"] = stateStillExists ? (removeStateErr.localizedDescription ?: @"Failed to remove state") : @"";
+    if (stateStillExists) {
+        result[@"ok"] = @"NO";
+        result[@"error"] = removeStateErr.localizedDescription ?: @"Failed to clear injection state";
+        [PXDiagnostics log:@"[patch] restore result=%@", result];
+        return result;
+    }
+    (void)stateRemoved;
     result[@"ok"] = @"YES";
     result[@"error"] = @"";
     [PXDiagnostics log:@"[patch] restore result=%@", result];
@@ -1695,10 +1798,15 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
     result[@"stateExists"] = [fm fileExistsAtPath:PXIPStatePath(bundleID ?: @"")] ? @"YES" : @"NO";
     result[@"state"] = state ?: @{};
     NSString *targetDylib = state[@"targetDylib"];
-    result[@"targetDylibExists"] = (targetDylib.length && [fm fileExistsAtPath:targetDylib]) ? @"YES" : @"NO";
+    BOOL weakLoadMode = [state[@"mode"] isEqual:@"weak-load-carrier-installed"] || [state[@"syntheticWeakLoadInstalled"] isEqual:@"YES"];
+    BOOL targetDylibExists = targetDylib.length && [fm fileExistsAtPath:targetDylib];
+    result[@"weakLoadMode"] = weakLoadMode ? @"YES" : @"NO";
+    result[@"weakLoadStateStale"] = (weakLoadMode && !targetDylibExists) ? @"YES" : @"NO";
+    result[@"weakLoadStatusNote"] = weakLoadMode ? (targetDylibExists ? @"Synthetic weak-load dylib exists; marker status determines whether dyld loaded it." : @"Synthetic weak-load state exists but target dylib is missing; Restore In-Place will clear stale state.") : @"";
+    result[@"targetDylibExists"] = targetDylibExists ? @"YES" : @"NO";
     result[@"targetDylibPath"] = targetDylib ?: @"";
-    result[@"targetDylibFingerprint"] = (targetDylib.length && [fm fileExistsAtPath:targetDylib]) ? (PXIPFileFingerprint(targetDylib) ?: @"") : @"";
-    result[@"targetDylibPermissions"] = (targetDylib.length && [fm fileExistsAtPath:targetDylib]) ? PXIPFilePermissions(targetDylib) : @"";
+    result[@"targetDylibFingerprint"] = targetDylibExists ? (PXIPFileFingerprint(targetDylib) ?: @"") : @"";
+    result[@"targetDylibPermissions"] = targetDylibExists ? PXIPFilePermissions(targetDylib) : @"";
     PXIPAddCodeSignatureOnlyStatus(result, @"targetDylib", targetDylib);
     NSString *patchedCopy = state[@"patchedCopy"];
     result[@"patchedCopyExists"] = (patchedCopy.length && [fm fileExistsAtPath:patchedCopy]) ? @"YES" : @"NO";
