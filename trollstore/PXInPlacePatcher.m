@@ -272,7 +272,8 @@ static NSString *PXIPResolveLoadCommandPath(NSString *loadName, NSString *execut
 }
 
 static NSString *PXIPCanonicalPathKey(NSString *path) {
-    NSString *key = [[path ?: @"" stringByStandardizingPath] copy];
+    NSString *rawPath = path ? path : @"";
+    NSString *key = [[rawPath stringByStandardizingPath] copy];
     if ([key hasPrefix:@"/private/var/"]) {
         key = [@"/var/" stringByAppendingString:[key substringFromIndex:@"/private/var/".length]];
     }
@@ -353,7 +354,8 @@ static BOOL PXIPIsIgnoredCarrierName(NSString *name) {
 }
 
 static BOOL PXIPIsSwiftRuntimeName(NSString *name) {
-    return [[name ?: @""].lowercaseString hasPrefix:@"libswift"];
+    NSString *rawName = name ? name : @"";
+    return [rawName.lowercaseString hasPrefix:@"libswift"];
 }
 
 static BOOL PXIPIsSystemLoadName(NSString *loadName) {
