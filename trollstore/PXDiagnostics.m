@@ -739,6 +739,12 @@ static NSArray<NSString *> *PXDiagMissingEntitlements(NSDictionary<NSString *, i
     return [PXInPlacePatcher scanFrameworkCarriersBundleID:targetBundleID];
 }
 
++ (NSDictionary<NSString *,id> *)deepScanBundleID:(NSString *)bundleID {
+    NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
+    [self log:@"[carrier] diagnostic deep scan bundleID=%@", targetBundleID];
+    return [PXInPlacePatcher deepScanBundleID:targetBundleID];
+}
+
 + (NSDictionary<NSString *,id> *)patchFrameworkCarrierBundleID:(NSString *)bundleID {
     NSString *targetBundleID = bundleID.length ? bundleID : @"com.finalwire.aida64";
     [self log:@"[carrier] diagnostic patch bundleID=%@", targetBundleID];

@@ -458,6 +458,80 @@ static BOOL PXIPLooksLikeMachO(NSString *path) {
     return magic == MH_MAGIC || magic == MH_CIGAM || magic == MH_MAGIC_64 || magic == MH_CIGAM_64 || magic == FAT_MAGIC || magic == FAT_CIGAM;
 }
 
+static BOOL PXIPRelativePathIsExtensionOnly(NSString *relativePath) {
+    return [relativePath containsString:@".appex/"] || [relativePath hasPrefix:@"PlugIns/"];
+}
+
+static BOOL PXIPRelativePathLooksSystemSynthetic(NSString *relativePath) {
+    NSString *name = relativePath.lastPathComponent.lowercaseString ?: @"";
+    return [name isEqualToString:@"projectxinject.dylib"] || [name hasPrefix:@"libswift"];
+}
+
+static NSArray<NSString *> *PXIPExtractPrintableStrings(NSData *data, NSUInteger maxStrings) {
+    if (!data.length || maxStrings == 0) return @[];
+    const unsigned char *bytes = data.bytes;
+    NSUInteger len = data.length;
+    NSMutableArray<NSString *> *strings = [NSMutableArray array];
+    NSMutableData *current = [NSMutableData data];
+    for (NSUInteger i = 0; i < len && strings.count < maxStrings; i++) {
+        unsigned char c = bytes[i];
+        BOOL printable = (c >= 32 && c <= 126);
+        if (printable) {
+            if (current.length < 512) [current appendBytes:&c length:1];
+        } else {
+            if (current.length >= 5) {
+                NSString *s = [[NSString alloc] initWithData:current encoding:NSASCIIStringEncoding];
+                if (s.length) [strings addObject:s];
+            }
+            [current setLength:0];
+        }
+    }
+    if (strings.count < maxStrings && current.length >= 5) {
+        NSString *s = [[NSString alloc] initWithData:current encoding:NSASCIIStringEncoding];
+        if (s.length) [strings addObject:s];
+    }
+    return strings ?: @[];
+}
+
+static NSArray<NSDictionary *> *PXIPDynamicLoadHintsForMachO(NSString *path, NSString *relativePath, NSString *bundlePath, BOOL encrypted) {
+    if (encrypted) return @[];
+    NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
+    unsigned long long size = [attrs[NSFileSize] unsignedLongLongValue];
+    if (size == 0 || size > 16ULL * 1024ULL * 1024ULL) return @[];
+    NSData *data = [NSData dataWithContentsOfFile:path options:0 error:nil];
+    if (!data.length) return @[];
+    NSArray<NSString *> *strings = PXIPExtractPrintableStrings(data, 3000);
+    NSArray<NSString *> *needles = @[@"dlopen", @"NSBundle", @"bundleWithPath", @"loadAndReturnError", @"@rpath/", @"@loader_path/", @"@executable_path/", @"Frameworks/", @"PlugIns/", @".framework", @".dylib"];
+    NSMutableArray<NSDictionary *> *hints = [NSMutableArray array];
+    for (NSString *s in strings) {
+        if (hints.count >= 40) break;
+        NSString *matched = @"";
+        for (NSString *needle in needles) {
+            if ([s rangeOfString:needle options:NSCaseInsensitiveSearch].location != NSNotFound) {
+                matched = needle;
+                break;
+            }
+        }
+        if (!matched.length) continue;
+        NSString *candidatePath = @"";
+        if ([s hasPrefix:@"@executable_path/"]) {
+            NSString *exeDir = bundlePath ?: @"";
+            candidatePath = [exeDir stringByAppendingPathComponent:[s substringFromIndex:@"@executable_path/".length]];
+        } else if ([s hasPrefix:@"Frameworks/"] || [s hasPrefix:@"PlugIns/"]) {
+            candidatePath = [bundlePath stringByAppendingPathComponent:s];
+        }
+        [hints addObject:@{
+            @"sourcePath": path ?: @"",
+            @"sourceRelativePath": relativePath ?: @"",
+            @"matchedPattern": matched ?: @"",
+            @"hintString": s ?: @"",
+            @"candidatePath": candidatePath ?: @"",
+            @"candidateExists": (candidatePath.length && [[NSFileManager defaultManager] fileExistsAtPath:candidatePath]) ? @"YES" : @"NO",
+        }];
+    }
+    return hints ?: @[];
+}
+
 static void PXIPWriteLE16(NSMutableData *data, uint16_t value) {
     uint8_t b[2] = { (uint8_t)(value & 0xff), (uint8_t)((value >> 8) & 0xff) };
     [data appendBytes:b length:sizeof(b)];
@@ -724,6 +798,7 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         NSMutableSet<NSString *> *linkedRelativeKeys = [NSMutableSet set];
         NSMutableArray<NSDictionary *> *weakMissingLoads = [NSMutableArray array];
         NSMutableArray<NSDictionary *> *weakSystemShadowedLoads = [NSMutableArray array];
+        NSMutableSet<NSString *> *weakSystemShadowedAppBundlePathKeys = [NSMutableSet set];
         NSMutableArray<NSDictionary *> *rpathResolutionDetails = [NSMutableArray array];
         NSMutableArray<NSDictionary *> *extensionOnlyCandidates = [NSMutableArray array];
         for (NSString *loadName in mainLoad[@"loadedDylibs"] ?: @[]) {
@@ -766,11 +841,14 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
                     @"cmdName": loadCommand[@"cmdName"] ?: @"",
                     @"category": @"weak-missing-load",
                 }];
-            } else if (appBundlePath.length && !existingPath.length && (systemPathBeforeAppBundle || systemShadowRisk.length)) {
+            } else if (appBundlePath.length && (systemPathBeforeAppBundle || systemShadowRisk.length)) {
+                [weakSystemShadowedAppBundlePathKeys addObject:PXIPCanonicalPathKey(appBundlePath) ?: @""];
                 [weakSystemShadowedLoads addObject:@{
                     @"loadName": loadName ?: @"",
                     @"resolvedPath": appBundlePath ?: @"",
                     @"resolvedCandidates": resolvedCandidates ?: @[],
+                    @"existingPath": existingPath ?: @"",
+                    @"appBundlePathExists": (appBundlePath.length && [fm fileExistsAtPath:appBundlePath]) ? @"YES" : @"NO",
                     @"relativeLoadKey": PXIPFrameworkRelativeLoadKey(loadName) ?: @"",
                     @"cmdName": loadCommand[@"cmdName"] ?: @"",
                     @"category": @"weak-missing-load-shadowed",
@@ -872,11 +950,13 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
             BOOL ignored = PXIPIsIgnoredCarrierName(last) || PXIPIsIgnoredCarrierName(path.stringByDeletingLastPathComponent.lastPathComponent);
             NSString *relativeKey = rel ?: @"";
             BOOL linked = [linkedPaths containsObject:PXIPCanonicalPathKey(path)] || [linkedRelativeKeys containsObject:relativeKey];
+            BOOL shadowedWeakSyntheticPath = [weakSystemShadowedAppBundlePathKeys containsObject:PXIPCanonicalPathKey(path)];
             NSString *skipReason = @"";
             if (encrypted) skipReason = @"encrypted";
+            else if (shadowedWeakSyntheticPath) skipReason = @"weak-load-system-shadowed";
             else if (ignored) skipReason = @"ignored-name";
             else if (encErr || loadErr) skipReason = @"unreadable";
-            BOOL eligibleRow = (!encrypted && !ignored && !encErr && !loadErr);
+            BOOL eligibleRow = (!encrypted && !shadowedWeakSyntheticPath && !ignored && !encErr && !loadErr);
             NSMutableDictionary *row = [@{
                 @"path": path ?: @"",
                 @"relativePath": rel ?: @"",
@@ -885,6 +965,7 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
                 @"fileSize": attrs[NSFileSize] ?: @0,
                 @"encrypted": encrypted ? @"YES" : @"NO",
                 @"swiftRuntime": swiftRuntime ? @"YES" : @"NO",
+                @"weakLoadShadowedSynthetic": shadowedWeakSyntheticPath ? @"YES" : @"NO",
                 @"ignored": ignored ? @"YES" : @"NO",
                 @"linkedFromMain": linked ? @"YES" : @"NO",
                 @"dependencyOfLinkedCarrier": @"NO",
@@ -1017,6 +1098,223 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
         result[@"ok"] = @"NO";
         result[@"error"] = [NSString stringWithFormat:@"Exception during carrier scan: %@ %@", ex.name ?: @"", ex.reason ?: @""];
         [PXDiagnostics log:@"[carrier] scan exception=%@", result[@"error"]];
+        return result;
+    }
+}
+
++ (NSDictionary<NSString *,id> *)deepScanBundleID:(NSString *)bundleID {
+    NSMutableDictionary *result = [NSMutableDictionary dictionary];
+    result[@"bundleID"] = bundleID ?: @"";
+    [PXDiagnostics log:@"[deep-scan] requested bundleID=%@", bundleID ?: @""];
+    @try {
+        NSDictionary *resolved = PXIPResolve(bundleID);
+        [result addEntriesFromDictionary:resolved ?: @{}];
+        NSString *bundlePath = resolved[@"bundlePath"] ?: @"";
+        NSString *executablePath = resolved[@"executablePath"] ?: @"";
+        NSString *frameworksPath = resolved[@"frameworksPath"] ?: @"";
+        NSFileManager *fm = [NSFileManager defaultManager];
+        if (!bundlePath.length || !executablePath.length || ![fm fileExistsAtPath:executablePath]) {
+            result[@"ok"] = @"NO";
+            result[@"error"] = @"Failed to resolve target executable";
+            [PXDiagnostics log:@"[deep-scan] result=%@", result];
+            return result;
+        }
+
+        NSDictionary *carrierScan = [self scanFrameworkCarriersBundleID:bundleID];
+        result[@"carrierScanSummary"] = @{
+            @"ok": carrierScan[@"ok"] ?: @"NO",
+            @"recommendedPatchAction": carrierScan[@"recommendedPatchAction"] ?: @"",
+            @"recommendationReason": carrierScan[@"recommendationReason"] ?: @"",
+            @"selectionReason": carrierScan[@"selectionReason"] ?: @"",
+            @"standardLinkedEligibleCount": carrierScan[@"standardLinkedEligibleCount"] ?: @0,
+            @"dependencyEligibleCount": carrierScan[@"dependencyEligibleCount"] ?: @0,
+            @"fallbackEligibleCount": carrierScan[@"fallbackEligibleCount"] ?: @0,
+            @"swiftRuntimeCandidateCount": carrierScan[@"swiftRuntimeCandidateCount"] ?: @0,
+            @"weakMissingLoadCandidateCount": @([carrierScan[@"weakMissingLoadCandidates"] isKindOfClass:[NSArray class]] ? [carrierScan[@"weakMissingLoadCandidates"] count] : 0),
+            @"weakSystemShadowedLoadCandidateCount": @([carrierScan[@"weakSystemShadowedLoadCandidates"] isKindOfClass:[NSArray class]] ? [carrierScan[@"weakSystemShadowedLoadCandidates"] count] : 0),
+        };
+        result[@"rpathResolutionDetails"] = carrierScan[@"rpathResolutionDetails"] ?: @[];
+        result[@"weakMissingLoadCandidates"] = carrierScan[@"weakMissingLoadCandidates"] ?: @[];
+        result[@"weakSystemShadowedLoadCandidates"] = carrierScan[@"weakSystemShadowedLoadCandidates"] ?: @[];
+
+        NSError *mainEncErr = nil;
+        NSDictionary *mainEncryption = [PXMachOInjector encryptionSummaryForMachOAtPath:executablePath error:&mainEncErr];
+        BOOL mainEncrypted = [mainEncryption[@"encrypted"] isEqual:@"YES"];
+        result[@"mainExecutableEncrypted"] = mainEncrypted ? @"YES" : @"NO";
+        result[@"mainEncryption"] = mainEncryption ?: @{};
+        result[@"mainEncryptionError"] = mainEncErr.localizedDescription ?: @"";
+
+        NSMutableArray<NSDictionary *> *inventory = [NSMutableArray array];
+        NSMutableDictionary<NSString *, NSMutableDictionary *> *nodeByPath = [NSMutableDictionary dictionary];
+        NSMutableSet<NSString *> *seen = [NSMutableSet set];
+        NSMutableArray<NSString *> *pathsToCheck = [NSMutableArray arrayWithObject:executablePath];
+        NSDirectoryEnumerator *en = [fm enumeratorAtPath:bundlePath];
+        NSString *rel = nil;
+        while ((rel = [en nextObject]) && pathsToCheck.count < 2000) {
+            NSString *path = [bundlePath stringByAppendingPathComponent:rel];
+            BOOL isDir = NO;
+            if (![fm fileExistsAtPath:path isDirectory:&isDir] || isDir) continue;
+            [pathsToCheck addObject:path];
+        }
+
+        NSUInteger maxMachO = 400;
+        for (NSString *path in pathsToCheck) {
+            if (inventory.count >= maxMachO) break;
+            NSString *key = PXIPCanonicalPathKey(path);
+            if (!key.length || [seen containsObject:key]) continue;
+            [seen addObject:key];
+            if (!PXIPLooksLikeMachO(path)) continue;
+            NSString *relativePath = [path isEqualToString:executablePath] ? (resolved[@"executableName"] ?: path.lastPathComponent ?: @"") : [path substringFromIndex:MIN(bundlePath.length + 1, path.length)];
+            NSDictionary *attrs = [fm attributesOfItemAtPath:path error:nil];
+            NSError *encErr = nil;
+            NSDictionary *enc = [PXMachOInjector encryptionSummaryForMachOAtPath:path error:&encErr];
+            NSError *loadErr = nil;
+            NSDictionary *load = [PXMachOInjector loadCommandSummaryForMachOAtPath:path error:&loadErr];
+            BOOL encrypted = [enc[@"encrypted"] isEqual:@"YES"];
+            BOOL extensionOnly = PXIPRelativePathIsExtensionOnly(relativePath);
+            BOOL swiftRuntime = PXIPIsSwiftRuntimeName(path.lastPathComponent ?: @"");
+            BOOL projectXSynthetic = PXIPIsIgnoredCarrierName(path.lastPathComponent ?: @"");
+            BOOL systemLikeName = PXIPRelativePathLooksSystemSynthetic(relativePath);
+            NSString *skipReason = @"";
+            if ([path isEqualToString:executablePath]) skipReason = mainEncrypted ? @"main-executable-encrypted" : @"main-executable";
+            else if (extensionOnly) skipReason = @"extension-only-not-loaded-by-main-app";
+            else if (projectXSynthetic) skipReason = @"projectx-synthetic-or-injector";
+            else if (systemLikeName) skipReason = @"system-like-runtime-name";
+            else if (encrypted) skipReason = @"encrypted";
+            else if (encErr || loadErr) skipReason = @"unreadable";
+            BOOL eligibleCarrierShape = ![path isEqualToString:executablePath] && !extensionOnly && !projectXSynthetic && !systemLikeName && !encrypted && !encErr && !loadErr;
+            NSMutableDictionary *row = [@{
+                @"path": path ?: @"",
+                @"canonicalPath": key ?: @"",
+                @"relativePath": relativePath ?: @"",
+                @"name": path.lastPathComponent ?: @"",
+                @"fileSize": attrs[NSFileSize] ?: @0,
+                @"mainExecutable": [path isEqualToString:executablePath] ? @"YES" : @"NO",
+                @"encrypted": encrypted ? @"YES" : @"NO",
+                @"extensionOnly": extensionOnly ? @"YES" : @"NO",
+                @"swiftRuntime": swiftRuntime ? @"YES" : @"NO",
+                @"systemLikeName": systemLikeName ? @"YES" : @"NO",
+                @"projectXSynthetic": projectXSynthetic ? @"YES" : @"NO",
+                @"eligibleCarrierShape": eligibleCarrierShape ? @"YES" : @"NO",
+                @"reachableFromMain": @"NO",
+                @"reachableDepth": @(-1),
+                @"skipReason": skipReason ?: @"",
+                @"encryption": enc ?: @{},
+                @"encryptionError": encErr.localizedDescription ?: @"",
+                @"loadedDylibs": load[@"loadedDylibs"] ?: @[],
+                @"rpaths": load[@"rpaths"] ?: @[],
+                @"loadCommandError": loadErr.localizedDescription ?: @"",
+            } mutableCopy];
+            [inventory addObject:row];
+            nodeByPath[key] = row;
+        }
+
+        NSMutableArray<NSDictionary *> *edges = [NSMutableArray array];
+        NSMutableArray<NSDictionary *> *reachableCarrierCandidates = [NSMutableArray array];
+        NSMutableArray<NSString *> *queue = [NSMutableArray array];
+        NSString *mainKey = PXIPCanonicalPathKey(executablePath);
+        NSMutableDictionary *mainNode = nodeByPath[mainKey];
+        if (mainNode) {
+            mainNode[@"reachableFromMain"] = @"YES";
+            mainNode[@"reachableDepth"] = @0;
+            [queue addObject:mainKey];
+        }
+        NSUInteger qIndex = 0;
+        while (qIndex < queue.count && edges.count < 400) {
+            NSString *key = queue[qIndex++];
+            NSMutableDictionary *node = nodeByPath[key];
+            if (!node) continue;
+            NSUInteger depth = [node[@"reachableDepth"] unsignedIntegerValue];
+            NSString *loaderPath = node[@"path"] ?: @"";
+            NSArray *rpaths = [node[@"rpaths"] isKindOfClass:[NSArray class]] ? node[@"rpaths"] : @[];
+            NSArray *loads = [node[@"loadedDylibs"] isKindOfClass:[NSArray class]] ? node[@"loadedDylibs"] : @[];
+            for (NSString *loadName in loads) {
+                if (edges.count >= 400) break;
+                NSArray *resolvedCandidates = PXIPResolveRPathLoadCandidates(loadName, rpaths, executablePath, frameworksPath, loaderPath);
+                NSString *resolvedPath = PXIPFirstExistingResolvedPath(resolvedCandidates, fm);
+                NSString *targetKey = PXIPCanonicalPathKey(resolvedPath);
+                NSMutableDictionary *targetNode = targetKey.length ? nodeByPath[targetKey] : nil;
+                NSString *edgeType = targetNode ? @"app-bundle" : (PXIPIsSystemLoadName(loadName) ? @"system" : @"unresolved");
+                [edges addObject:@{
+                    @"from": loaderPath ?: @"",
+                    @"fromRelativePath": node[@"relativePath"] ?: @"",
+                    @"loadName": loadName ?: @"",
+                    @"resolvedPath": resolvedPath ?: @"",
+                    @"resolvedCandidates": resolvedCandidates ?: @[],
+                    @"edgeType": edgeType ?: @"",
+                    @"targetKnownMachO": targetNode ? @"YES" : @"NO",
+                    @"depth": @(depth),
+                }];
+                if (targetNode && ![targetNode[@"reachableFromMain"] isEqual:@"YES"]) {
+                    targetNode[@"reachableFromMain"] = @"YES";
+                    targetNode[@"reachableDepth"] = @(depth + 1);
+                    [queue addObject:targetKey];
+                    if ([targetNode[@"eligibleCarrierShape"] isEqual:@"YES"]) {
+                        [reachableCarrierCandidates addObject:targetNode];
+                    }
+                }
+            }
+        }
+
+        NSMutableArray<NSDictionary *> *dynamicHints = [NSMutableArray array];
+        for (NSDictionary *node in inventory) {
+            if (dynamicHints.count >= 200) break;
+            BOOL encrypted = [node[@"encrypted"] isEqual:@"YES"];
+            NSArray *hints = PXIPDynamicLoadHintsForMachO(node[@"path"] ?: @"", node[@"relativePath"] ?: @"", bundlePath, encrypted);
+            for (NSDictionary *hint in hints) {
+                if (dynamicHints.count >= 200) break;
+                [dynamicHints addObject:hint];
+            }
+        }
+
+        NSUInteger eligibleShapeCount = 0;
+        NSUInteger extensionOnlyCount = 0;
+        NSUInteger encryptedCount = 0;
+        for (NSDictionary *node in inventory) {
+            if ([node[@"eligibleCarrierShape"] isEqual:@"YES"]) eligibleShapeCount++;
+            if ([node[@"extensionOnly"] isEqual:@"YES"]) extensionOnlyCount++;
+            if ([node[@"encrypted"] isEqual:@"YES"]) encryptedCount++;
+        }
+        BOOL hasReachableCarrier = reachableCarrierCandidates.count > 0;
+        BOOL hasInstallableWeak = [carrierScan[@"weakMissingLoadCandidates"] isKindOfClass:[NSArray class]] && [carrierScan[@"weakMissingLoadCandidates"] count] > 0;
+        BOOL hasShadowedWeak = [carrierScan[@"weakSystemShadowedLoadCandidates"] isKindOfClass:[NSArray class]] && [carrierScan[@"weakSystemShadowedLoadCandidates"] count] > 0;
+        NSString *unsupportedReason = @"";
+        NSString *recommendedAction = @"Deep scan only";
+        if (hasReachableCarrier) {
+            recommendedAction = @"Patch reachable app-owned carrier by index after marker-only test";
+        } else if (hasInstallableWeak) {
+            recommendedAction = @"Install Weak-Load Carrier";
+        } else if (mainEncrypted && hasShadowedWeak) {
+            recommendedAction = @"Unsupported In-Place";
+            unsupportedReason = @"Main executable is encrypted, no reachable app-owned carrier was found, and weak-load candidates are system/shared-cache shadowed.";
+        } else if (mainEncrypted && !hasReachableCarrier) {
+            recommendedAction = @"Unsupported In-Place";
+            unsupportedReason = @"Main executable is encrypted and no reachable app-owned carrier was found.";
+        }
+
+        result[@"ok"] = @"YES";
+        result[@"error"] = @"";
+        result[@"deepScanVersion"] = @1;
+        result[@"inventoryCount"] = @(inventory.count);
+        result[@"eligibleCarrierShapeCount"] = @(eligibleShapeCount);
+        result[@"reachableCarrierCandidateCount"] = @(reachableCarrierCandidates.count);
+        result[@"extensionOnlyCount"] = @(extensionOnlyCount);
+        result[@"encryptedMachOCount"] = @(encryptedCount);
+        result[@"loadGraphEdgeCount"] = @(edges.count);
+        result[@"dynamicLoadHintCount"] = @(dynamicHints.count);
+        result[@"allMachOCandidates"] = inventory ?: @[];
+        result[@"reachableCarrierCandidates"] = reachableCarrierCandidates ?: @[];
+        result[@"loadGraphEdges"] = edges ?: @[];
+        result[@"dynamicLoadHints"] = dynamicHints ?: @[];
+        result[@"recommendedPatchAction"] = recommendedAction ?: @"";
+        result[@"unsupportedReason"] = unsupportedReason ?: @"";
+        result[@"note"] = @"Deep scan is diagnostic only. It discovers possible carriers and hints; patch only after marker-only validation.";
+        [PXDiagnostics log:@"[deep-scan] result=%@", result];
+        return result;
+    } @catch (NSException *ex) {
+        result[@"ok"] = @"NO";
+        result[@"error"] = [NSString stringWithFormat:@"Exception during deep scan: %@ %@", ex.name ?: @"", ex.reason ?: @""];
+        [PXDiagnostics log:@"[deep-scan] exception=%@", result[@"error"]];
         return result;
     }
 }

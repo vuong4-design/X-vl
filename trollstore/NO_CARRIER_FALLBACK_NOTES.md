@@ -41,6 +41,18 @@ fallbackEligibleCount
 rejectedCandidateCount
 ```
 
+`Diag -> Deep Scan Carriers` adds a diagnostic-only pass for targets that have no obvious carrier. It reports:
+
+```text
+allMachOCandidates
+reachableCarrierCandidates
+loadGraphEdges
+dynamicLoadHints
+unsupportedReason
+```
+
+Deep scan does not patch anything. It is intended to avoid missing hidden app-owned carriers before marking a target unsupported.
+
 ## Candidate Categories
 
 ### linked-from-main
@@ -141,6 +153,8 @@ No weak-load carrier action available
 
 Do not run `Install Weak-Load Carrier` for candidates reported under `weakSystemShadowedLoadCandidates`.
 
+If a previous synthetic install already copied the file into the app bundle, run `Restore In-Place` before rescanning. Newer scanner builds mark that stale file as `weakLoadShadowedSynthetic = YES` / `skipReason = weak-load-system-shadowed` so it is not recommended as a Swift runtime carrier.
+
 ### extension-only
 
 The Mach-O exists under an extension path, usually:
@@ -180,11 +194,14 @@ Remaining options are:
 ## Test Flow For `com.benchu.ARMCPUZ`
 
 1. Select target app: `com.benchu.ARMCPUZ`.
-2. Run `Scan Framework Carriers`.
-3. Read `recommendedPatchAction` and `recommendationReason`.
-4. If `dependencyChainCandidates` has entries, try patch by the candidate index listed in `candidates`.
-5. If `weakMissingLoadCandidates` exists and no shadow risk is reported, use `Install Weak-Load Carrier`, then apply marker-only snapshot and launch the app.
-6. If only `weakSystemShadowedLoadCandidates` exists, do not install a synthetic carrier; treat the target as blocked for in-place carrier mode unless another candidate appears.
-7. If only `swiftRuntimeCandidates` exists, test manually by index in marker-only mode first.
-8. If only `extensionOnlyCandidates` exists, do not patch for main app injection.
-9. If no candidates exist and main is encrypted, treat the app as blocked for in-place carrier mode.
+2. If a previous weak-load install was attempted, run `Restore In-Place` first to remove stale synthetic files.
+3. Run `Scan Framework Carriers`.
+4. If scan is blocked or ambiguous, run `Deep Scan Carriers`.
+5. Read `recommendedPatchAction`, `recommendationReason`, and `unsupportedReason`.
+6. If `reachableCarrierCandidates` has entries, inspect `loadGraphEdges`, then test marker-only before enabling hooks.
+7. If `dependencyChainCandidates` has entries, try patch by the candidate index listed in `candidates`.
+8. If `weakMissingLoadCandidates` exists and no shadow risk is reported, use `Install Weak-Load Carrier`, then apply marker-only snapshot and launch the app.
+9. If only `weakSystemShadowedLoadCandidates` exists, do not install a synthetic carrier; treat the target as blocked for in-place carrier mode unless deep scan finds another reachable carrier.
+10. If only `swiftRuntimeCandidates` exists, test manually by index in marker-only mode first.
+11. If only `extensionOnlyCandidates` exists, do not patch for main app injection.
+12. If no candidates exist and main is encrypted, treat the app as blocked for in-place carrier mode.

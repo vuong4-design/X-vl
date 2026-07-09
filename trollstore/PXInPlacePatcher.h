@@ -10,6 +10,7 @@ extern NSString * const PXInPlacePatcherErrorDomain;
 
 + (NSDictionary<NSString *, id> *)prepareBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)scanFrameworkCarriersBundleID:(NSString *)bundleID;
++ (NSDictionary<NSString *, id> *)deepScanBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)patchFrameworkCarrierBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)patchFrameworkCarrierBundleID:(NSString *)bundleID candidateIndex:(NSUInteger)candidateIndex;
 + (NSDictionary<NSString *, id> *)installWeakLoadCarrierBundleID:(NSString *)bundleID;
