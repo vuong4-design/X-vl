@@ -1319,6 +1319,176 @@ static BOOL PXIPCreateStoredZip(NSString *sourceRoot, NSString *zipPath, NSError
     }
 }
 
+static NSDictionary *PXMakePatchPlanItem(NSString *target,
+                                         NSString *kind,
+                                         NSString *reason,
+                                         NSString *proposedAction,
+                                         NSString *patchability,
+                                         NSString *riskLevel,
+                                         NSDictionary *extra)
+{
+    NSMutableDictionary *item = [NSMutableDictionary dictionary];
+    item[@"target"] = target ?: @"";
+    item[@"kind"] = kind ?: @"unknown";
+    item[@"reason"] = reason ?: @"";
+    item[@"proposedAction"] = proposedAction ?: @"";
+    item[@"patchability"] = patchability ?: @"unsupported";
+    item[@"riskLevel"] = riskLevel ?: @"high";
+    if ([extra isKindOfClass:NSDictionary.class] && extra.count > 0) {
+        item[@"extra"] = extra;
+    }
+    return item;
+}
+
++ (NSDictionary<NSString *,id> *)patchPlanForBundleID:(NSString *)bundleID {
+    if (bundleID.length == 0) {
+        return @{@"ok": @"NO", @"error": @"missing_bundle_id"};
+    }
+
+    NSDictionary *scan = [self deepScanBundleID:bundleID];
+    if (![scan isKindOfClass:NSDictionary.class] || ![scan[@"ok"] isEqual:@"YES"]) {
+        return @{
+            @"ok": @"NO",
+            @"bundleID": bundleID,
+            @"error": scan[@"error"] ?: @"deep_scan_failed"
+        };
+    }
+
+    NSMutableArray *items = [NSMutableArray array];
+
+    NSDictionary *carrierSummary = [scan[@"carrierScanSummary"] isKindOfClass:NSDictionary.class] ? scan[@"carrierScanSummary"] : @{};
+    NSDictionary *rpathDetails = [scan[@"rpathResolutionDetails"] isKindOfClass:NSDictionary.class] ? scan[@"rpathResolutionDetails"] : @{};
+    NSArray *weakMissing = [scan[@"weakMissingLoadCandidates"] isKindOfClass:NSArray.class] ? scan[@"weakMissingLoadCandidates"] : @[];
+    NSArray *weakShadowed = [scan[@"weakSystemShadowedLoadCandidates"] isKindOfClass:NSArray.class] ? scan[@"weakSystemShadowedLoadCandidates"] : @[];
+    NSArray *dynamicHints = [scan[@"dynamicLoadHints"] isKindOfClass:NSArray.class] ? scan[@"dynamicLoadHints"] : @[];
+    NSArray *allMachO = [scan[@"allMachOCandidates"] isKindOfClass:NSArray.class] ? scan[@"allMachOCandidates"] : @[];
+    NSArray *reachableCarriers = [scan[@"reachableCarrierCandidates"] isKindOfClass:NSArray.class] ? scan[@"reachableCarrierCandidates"] : @[];
+    BOOL mainEncrypted = [scan[@"mainExecutableEncrypted"] isEqual:@"YES"];
+
+    // Reachable carrier candidates → patchable
+    for (NSDictionary *node in reachableCarriers) {
+        if (![node isKindOfClass:NSDictionary.class]) continue;
+        [items addObject:PXMakePatchPlanItem(
+            node[@"relativePath"] ?: node[@"path"] ?: @"",
+            @"reachable_carrier",
+            @"App-owned Mach-O reachable from main executable via load graph.",
+            @"Patch as carrier by index after marker-only validation.",
+            @"patchable",
+            @"low",
+            node
+        )];
+    }
+
+    // Weak missing load candidates
+    for (id obj in weakMissing) {
+        NSString *target = [obj isKindOfClass:NSString.class] ? obj : ([obj isKindOfClass:NSDictionary.class] ? (obj[@"installName"] ?: [obj description]) : [obj description]);
+        NSDictionary *extra = [obj isKindOfClass:NSDictionary.class] ? obj : nil;
+        [items addObject:PXMakePatchPlanItem(
+            target,
+            @"weak_missing_load",
+            @"Weak linked dependency is missing from resolved bundle/system paths.",
+            @"Consider bundling a stub dylib/framework or installing as weak-load carrier.",
+            @"maybe_patchable",
+            @"medium",
+            extra
+        )];
+    }
+
+    // Weak system-shadowed load candidates
+    for (id obj in weakShadowed) {
+        NSString *target = [obj isKindOfClass:NSString.class] ? obj : ([obj isKindOfClass:NSDictionary.class] ? (obj[@"installName"] ?: [obj description]) : [obj description]);
+        NSDictionary *extra = [obj isKindOfClass:NSDictionary.class] ? obj : nil;
+        [items addObject:PXMakePatchPlanItem(
+            target,
+            @"weak_system_shadowed_load",
+            @"Weak dependency resolves to a system/private framework instead of bundled fallback.",
+            @"Prefer explicit bundled fallback path if binary has enough install-name space.",
+            @"maybe_patchable",
+            @"medium",
+            extra
+        )];
+    }
+
+    // Dynamic load hints
+    for (NSDictionary *hint in dynamicHints) {
+        if (![hint isKindOfClass:NSDictionary.class]) continue;
+        [items addObject:PXMakePatchPlanItem(
+            hint[@"hintPath"] ?: hint[@"path"] ?: @"",
+            @"dynamic_load_hint",
+            @"Potential runtime load path found in strings or dynamic-load hints.",
+            @"Patch string in-place only if replacement path is not longer than original; otherwise requires Mach-O rewrite.",
+            @"maybe_patchable",
+            @"high",
+            hint
+        )];
+    }
+
+    // Encrypted Mach-O candidates
+    for (NSDictionary *node in allMachO) {
+        if (![node isKindOfClass:NSDictionary.class]) continue;
+        if (![node[@"encrypted"] isEqual:@"YES"]) continue;
+        [items addObject:PXMakePatchPlanItem(
+            node[@"relativePath"] ?: node[@"path"] ?: @"",
+            @"encrypted_macho",
+            @"Mach-O is encrypted and cannot be safely patched in-place.",
+            @"Skip. Decrypted input is required before patching.",
+            @"unsupported",
+            @"high",
+            node
+        )];
+    }
+
+    // Main executable encrypted warning
+    if (mainEncrypted) {
+        [items addObject:PXMakePatchPlanItem(
+            scan[@"executablePath"] ?: @"main-executable",
+            @"main_encrypted",
+            @"Main executable is encrypted. Direct load-command patching is not possible.",
+            @"Requires decrypted binary or alternative carrier injection path.",
+            @"unsupported",
+            @"high",
+            scan[@"mainEncryption"] ?: @{}
+        )];
+    }
+
+    // Compute summary counts
+    NSUInteger patchableCount = 0;
+    NSUInteger maybePatchableCount = 0;
+    NSUInteger unsupportedCount = 0;
+    NSUInteger highRiskCount = 0;
+    for (NSDictionary *item in items) {
+        NSString *p = item[@"patchability"];
+        NSString *r = item[@"riskLevel"];
+        if ([p isEqualToString:@"patchable"]) patchableCount++;
+        else if ([p isEqualToString:@"maybe_patchable"]) maybePatchableCount++;
+        else unsupportedCount++;
+        if ([r isEqualToString:@"high"]) highRiskCount++;
+    }
+
+    return @{
+        @"ok": @"YES",
+        @"bundleID": bundleID,
+        @"mode": @"diagnostic_patch_plan",
+        @"appliesChanges": @NO,
+        @"deepScanRecommendedAction": scan[@"recommendedPatchAction"] ?: @"",
+        @"deepScanUnsupportedReason": scan[@"unsupportedReason"] ?: @"",
+        @"summary": @{
+            @"totalItems": @(items.count),
+            @"patchable": @(patchableCount),
+            @"maybePatchable": @(maybePatchableCount),
+            @"unsupported": @(unsupportedCount),
+            @"highRisk": @(highRiskCount),
+            @"machOCandidateCount": @(allMachO.count),
+            @"reachableCarrierCount": @(reachableCarriers.count),
+            @"mainEncrypted": mainEncrypted ? @"YES" : @"NO"
+        },
+        @"carrierScanSummary": carrierSummary,
+        @"rpathResolutionDetails": rpathDetails,
+        @"items": items,
+        @"note": @"Patch plan is diagnostic only. No binary modifications are applied. Review items before executing any patch."
+    };
+}
+
 + (NSDictionary<NSString *,id> *)patchFrameworkCarrierBundleID:(NSString *)bundleID {
     return [self patchFrameworkCarrierBundleID:bundleID candidateIndex:NSNotFound];
 }

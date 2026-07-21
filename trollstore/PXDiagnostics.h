@@ -32,6 +32,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSDictionary<NSString *, id> *)prepareInPlaceBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)scanFrameworkCarriersBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)deepScanBundleID:(NSString *)bundleID;
++ (NSDictionary<NSString *, id> *)patchPlanForBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)patchFrameworkCarrierBundleID:(NSString *)bundleID;
 + (NSDictionary<NSString *, id> *)patchFrameworkCarrierBundleID:(NSString *)bundleID candidateIndex:(NSUInteger)candidateIndex;
 + (NSDictionary<NSString *, id> *)installWeakLoadCarrierBundleID:(NSString *)bundleID;
